@@ -18,25 +18,58 @@ try:
     GONDERICI_SIFRE = st.secrets["GONDERICI_SIFRE"].replace(" ", "")
     ADMIN_MAIL = st.secrets["ADMIN_MAIL"]
 except Exception:
-    st.error("Secrets ayarları eksik! Streamlit Cloud panelinden kontrol edin.")
+    st.error("Secrets ayarları eksik! Streamlit Cloud panelinden Secrets kısmını kontrol edin.")
     st.stop()
 
 SMTP_SUNUCU = "smtp.gmail.com"
 SMTP_PORT = 465 
 
-# --- 1. VERİTABANI MOTORU ---
+# --- 1. VERİTABANI MOTORU VE OTOMATİK GÜNCELLEME ---
 def veritabanini_hazirla():
     conn = sqlite3.connect('tse_v4.db')
     cursor = conn.cursor()
+    # Tabloyu en geniş haliyle oluştur/güncelle
     cursor.execute('''CREATE TABLE IF NOT EXISTS denetimler (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, basvuru_no TEXT, firma_adi TEXT NOT NULL, marka TEXT,
-        arac_kategori TEXT, arac_tipi TEXT NOT NULL, varyant TEXT, versiyon TEXT, ticari_ad TEXT,
-        gtip_no TEXT, birim TEXT, uretim_ulkesi TEXT, arac_sayisi TEXT, sasi_no TEXT UNIQUE, 
-        basvuru_tarihi DATE, secim_tarihi DATE, il TEXT, durum TEXT DEFAULT 'Şasi Bekliyor',
-        notlar TEXT, guncelleme_tarihi TEXT, ekleyen_kullanici TEXT, silme_talebi INTEGER DEFAULT 0, silme_nedeni TEXT)''')
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        basvuru_no TEXT, 
+        firma_adi TEXT, 
+        marka TEXT,
+        arac_kategori TEXT, 
+        arac_tipi TEXT, 
+        varyant TEXT, 
+        versiyon TEXT, 
+        ticari_ad TEXT,
+        gtip_no TEXT, 
+        birim TEXT, 
+        uretim_ulkesi TEXT, 
+        arac_sayisi TEXT, 
+        sasi_no TEXT UNIQUE, 
+        basvuru_tarihi TEXT, 
+        secim_tarihi TEXT, 
+        il TEXT, 
+        durum TEXT DEFAULT 'Şasi Bekliyor',
+        notlar TEXT, 
+        guncelleme_tarihi TEXT, 
+        ekleyen_kullanici TEXT, 
+        silme_talebi INTEGER DEFAULT 0, 
+        silme_nedeni TEXT)''')
+    
+    # Eksik olabilecek sütunları kontrol et ve ekle (Hata almamak için)
+    sutunlar = [row[1] for row in cursor.execute("PRAGMA table_info(denetimler)")]
+    gerekli_sutunlar = ["basvuru_no", "basvuru_tarihi", "secim_tarihi", "il", "silme_talebi"]
+    for s in gerekli_sutunlar:
+        if s not in sutunlar:
+            cursor.execute(f"ALTER TABLE denetimler ADD COLUMN {s} TEXT")
+            
     cursor.execute('''CREATE TABLE IF NOT EXISTS kullanicilar (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, kullanici_adi TEXT UNIQUE NOT NULL, sifre TEXT NOT NULL,
-        rol TEXT NOT NULL, email TEXT, sorumlu_il TEXT, onay_durumu INTEGER DEFAULT 0, excel_yukleme_yetkisi INTEGER DEFAULT 0)''')
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        kullanici_adi TEXT UNIQUE, 
+        sifre TEXT,
+        rol TEXT, 
+        email TEXT, 
+        sorumlu_il TEXT, 
+        onay_durumu INTEGER DEFAULT 0, 
+        excel_yukleme_yetkisi INTEGER DEFAULT 0)''')
     conn.commit(); conn.close()
 
 veritabanini_hazirla()
@@ -53,7 +86,7 @@ def mail_gonder(konu, icerik):
         return True
     except: return False
 
-# --- 2. VERİ VE DURUM FONKSİYONLARI ---
+# --- 2. VERİ ÇEKME FONKSİYONLARI ---
 def durum_sayilarini_al():
     conn = sqlite3.connect('tse_v4.db')
     onay = conn.execute("SELECT COUNT(*) FROM kullanicilar WHERE onay_durumu = 0").fetchone()[0]
@@ -66,18 +99,17 @@ def verileri_getir():
     df = pd.read_sql_query("SELECT * FROM denetimler ORDER BY id DESC", conn)
     conn.close()
     
-    # Tarih ve Geçen Gün Hesaplama
-    df['secim_tarihi_dt'] = pd.to_datetime(df['secim_tarihi'], errors='coerce')
-    bugun = pd.to_datetime(datetime.now().strftime("%Y-%m-%d"))
-    df['Geçen Gün'] = (bugun - df['secim_tarihi_dt']).dt.days
-    
-    # Arrow hatasını engellemek için tüm tabloyu metne çeviriyoruz [cite: 1, 2]
-    df_display = df.copy()
-    df_display['secim_tarihi'] = df_display['secim_tarihi_dt'].dt.strftime('%Y-%m-%d')
-    for col in df_display.columns:
-        df_display[col] = df_display[col].astype(str).replace(['nan', 'None', '<NA>'], '-')
-    
-    return df_display
+    if not df.empty:
+        df['secim_tarihi_dt'] = pd.to_datetime(df['secim_tarihi'], errors='coerce')
+        bugun = pd.to_datetime(datetime.now().strftime("%Y-%m-%d"))
+        # Loglarda hata veren PyArrow sorununu kökten çözmek için her şeyi metne çeviriyoruz
+        df['Geçen Gün'] = (bugun - df['secim_tarihi_dt']).dt.days
+        df_display = df.copy()
+        df_display['secim_tarihi'] = df_display['secim_tarihi_dt'].dt.strftime('%Y-%m-%d')
+        for col in df_display.columns:
+            df_display[col] = df_display[col].astype(str).replace(['nan', 'None', '<NA>'], '-')
+        return df_display
+    return df
 
 def satir_boya(row): 
     if row['durum'] == 'Şasi Bekliyor': return ['background-color: rgba(255, 193, 7, 0.2)'] * len(row)
@@ -97,22 +129,22 @@ if not st.session_state.giris_yapildi:
         with tg:
             with st.form("l"):
                 ka, si = st.text_input("Kullanıcı"), st.text_input("Şifre", type="password")
-                if st.form_submit_button("Giriş"):
+                if st.form_submit_button("Giriş Yap", use_container_width=True):
                     conn = sqlite3.connect('tse_v4.db'); u = conn.cursor().execute("SELECT rol, sorumlu_il, onay_durumu FROM kullanicilar WHERE kullanici_adi=? AND sifre=?", (ka, si)).fetchone(); conn.close()
                     if u and u[2]==1: st.session_state.update({'giris_yapildi':True, 'kullanici_adi':ka, 'rol':u[0], 'sorumlu_il':u[1]}); st.rerun()
                     else: st.error("Hesap onaylanmamış veya hatalı giriş.")
         with tk:
             with st.form("r"):
-                yk, ys, ye, yil = st.text_input("Kullanıcı Adı"), st.text_input("Şifre"), st.text_input("E-Posta"), st.selectbox("İl", ["Ankara", "İstanbul", "Bursa", "Kocaeli"])
+                yk, ys, ye, yil = st.text_input("Kullanıcı Adı"), st.text_input("Şifre", type="password"), st.text_input("E-Posta"), st.selectbox("İl", ["Ankara", "İstanbul", "Bursa", "Kocaeli"])
                 if st.form_submit_button("Kayıt Ol"):
                     conn = sqlite3.connect('tse_v4.db')
-                    conn.execute("INSERT INTO kullanicilar (kullanici_adi, sifre, rol, email, sorumlu_il, onay_durumu) VALUES (?, ?, 'kullanici', ?, ?, 0)", (yk, ys, ye, yil))
+                    conn.execute("INSERT INTO kullanicilar (kullanici_adi, sifre, rol, email, sorumlu_il, onay_durumu) VALUES (?, ?, 'uzman', ?, ?, 0)", (yk, ys, ye, yil))
                     conn.commit(); conn.close()
                     threading.Thread(target=mail_gonder, args=("📝 YENİ KAYIT TALEBİ", f"Üye: {yk}")).start()
-                    st.success("Talep Admin'e iletildi."); st.rerun()
+                    st.success("Kayıt başarılı, mail gönderildi."); st.rerun()
     st.stop()
 
-# --- 4. ANA PANEL ---
+# --- 4. ANA DASHBOARD ---
 b_onay, b_silme = durum_sayilarini_al()
 df = verileri_getir()
 
@@ -129,7 +161,6 @@ tabs = st.tabs(t_labels)
 
 # --- SEKME 1: ANA TABLO ---
 with tabs[0]:
-    st.subheader("📋 Denetim Listesi")
     sutun_sirasi = ['sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_tipi', 'firma_adi', 'arac_kategori', 'il']
     final_df = df[[c for c in sutun_sirasi if c in df.columns]]
     st.dataframe(final_df.style.apply(satir_boya, axis=1), use_container_width=True, height=600)
@@ -164,45 +195,37 @@ with tabs[1]:
                         nd = st.selectbox("Durum", ["Teste Gönderildi", "Tamamlandı - Olumlu", "Tamamlandı - Olumsuz"])
                         sl = st.checkbox("Silme Talebi")
                         if st.form_submit_button("Güncelle"):
-                            conn = sqlite3.connect('tse_v4.db'); s_v = 1 if sl else 0
-                            conn.execute('UPDATE denetimler SET durum=?, silme_talebi=?, guncelleme_tarihi=? WHERE id=?', (nd, s_v, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sid_num))
+                            conn = sqlite3.connect('tse_v4.db')
+                            conn.execute('UPDATE denetimler SET durum=?, silme_talebi=?, guncelleme_tarihi=? WHERE id=?', (nd, 1 if sl else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sid_num))
                             conn.commit(); conn.close()
                             if sl: threading.Thread(target=mail_gonder, args=("⚠️ SİLME TALEBİ", f"Şasi: {cur['sasi_no']}")).start()
                             st.rerun()
 
-# --- SEKME 3: VERİ GİRİŞİ (DÜZELTİLDİ) ---
+# --- SEKME 3: VERİ GİRİŞİ (HATALARI GİDERİLDİ) ---
 with tabs[2]:
     st.subheader("📥 Veri Girişi")
-    c_form, c_excel = st.columns(2)
-    with c_form:
-        st.markdown("#### ✍️ Elden Kayıt")
-        with st.form("manuel_input"):
+    with st.form("manuel_input"):
+        c1, c2 = st.columns(2)
+        with c1:
             f_bn = st.text_input("Başvuru No")
             f_fa = st.text_input("Firma Adı")
             f_ma = st.text_input("Marka")
+        with c2:
             f_ti = st.text_input("Araç Tipi")
-            f_sn = st.text_input("Şasi No (Opsiyonel)")
-            if st.form_submit_button("Sisteme Ekle"):
-                if f_fa and f_ti:
-                    conn = sqlite3.connect('tse_v4.db')
-                    starih = datetime.now().strftime("%Y-%m-%d")
-                    durum = "Teste Gönderildi" if f_sn else "Şasi Bekliyor"
-                    conn.execute("INSERT INTO denetimler (basvuru_no, firma_adi, marka, arac_tipi, sasi_no, durum, basvuru_tarihi, secim_tarihi, il) VALUES (?,?,?,?,?,?,?,?,?)", 
-                                 (f_bn, f_fa, f_ma, f_ti, f_sn, durum, starih, starih, st.session_state.sorumlu_il))
-                    conn.commit(); conn.close(); st.success("Kayıt eklendi."); st.rerun()
-                else: st.warning("Firma ve Tip zorunludur.")
-    with c_excel:
-        st.markdown("#### 📁 Excel'den Aktar")
-        up = st.file_uploader("Dosya Seç", type=['xlsx', 'csv'])
-        if up:
-            try:
-                xl_df = pd.read_excel(up) if up.name.endswith('xlsx') else pd.read_csv(up)
-                st.write("Önizleme (İlk 5 Satır):")
-                st.dataframe(xl_df.head(), height=150)
-                if st.button("Tümünü İçeri Aktar"):
-                    # Veritabanı sütunlarına göre eşleme yapıp kaydetme mantığı buraya eklenebilir
-                    st.info("İçe aktarma özelliği yapılandırılıyor...")
-            except Exception as e: st.error(f"Hata: {e}")
+            f_ak = st.text_input("Araç Kategori")
+            f_sn = st.text_input("Şasi No (Atanmışsa)")
+        if st.form_submit_button("Sisteme Kaydet"):
+            if f_fa and f_ti:
+                conn = sqlite3.connect('tse_v4.db')
+                starih = datetime.now().strftime("%Y-%m-%d")
+                durum = "Teste Gönderildi" if f_sn else "Şasi Bekliyor"
+                # Sütunları güvenli şekilde tek tek yazıyoruz
+                conn.execute("""INSERT INTO denetimler 
+                    (basvuru_no, firma_adi, marka, arac_tipi, arac_kategori, sasi_no, durum, basvuru_tarihi, secim_tarihi, il) 
+                    VALUES (?,?,?,?,?,?,?,?,?,?)""", 
+                    (f_bn, f_fa, f_ma, f_ti, f_ak, f_sn, durum, starih, starih, st.session_state.sorumlu_il))
+                conn.commit(); conn.close(); st.success("Başarıyla eklendi."); st.rerun()
+            else: st.warning("Firma Adı ve Araç Tipi boş bırakılamaz.")
 
 # --- SEKME 4: YÖNETİCİ ---
 if st.session_state.rol == "admin":
@@ -210,15 +233,13 @@ if st.session_state.rol == "admin":
         st.subheader("👑 Yönetici İşlemleri")
         co, cs = st.columns(2)
         with co:
-            st.markdown(f"**Onay Bekleyen Üyeler ({b_onay})**")
+            st.write(f"Onay Bekleyen Üyeler ({b_onay})")
             conn = sqlite3.connect('tse_v4.db'); k_df = pd.read_sql_query("SELECT * FROM kullanicilar WHERE onay_durumu=0", conn); conn.close()
             for _, r in k_df.iterrows():
-                st.write(f"👤 {r['kullanici_adi']} ({r['sorumlu_il']})")
-                if st.button("Hesabı Onayla", key=f"o_{r['id']}"):
+                if st.button(f"Onayla: {r['kullanici_adi']}", key=f"o_{r['id']}"):
                     c = sqlite3.connect('tse_v4.db'); c.execute("UPDATE kullanicilar SET onay_durumu=1 WHERE id=?", (r['id'],)); c.commit(); c.close(); st.rerun()
         with cs:
-            st.markdown(f"**Silme Talepleri ({b_silme})**")
+            st.write(f"Silme Talepleri ({b_silme})")
             for _, r in df[df['silme_talebi']=="1"].iterrows():
-                st.write(f"🗑️ {r['sasi_no']}")
-                if st.button("Kayıt Sil", key=f"s_{r['id']}"):
+                if st.button(f"Kalıcı SİL: {r['sasi_no']}", key=f"s_{r['id']}"):
                     c = sqlite3.connect('tse_v4.db'); c.execute("DELETE FROM denetimler WHERE id=?", (r['id'],)); c.commit(); c.close(); st.rerun()
