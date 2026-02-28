@@ -10,12 +10,17 @@ from email.mime.multipart import MIMEMultipart
 import time
 
 # --- TSE KURUMSAL VE MAİL AYARLARI ---
-# Mail bilgilerini ihtiyacına göre doldurabilirsin.
-GONDERICI_MAIL = "denetim_sistemi@gmail.com" 
-GONDERICI_SIFRE = "mail_app_sifresi" 
-ADMIN_MAIL = "admin_tse@tse.org.tr" 
+# Streamlit Secrets üzerinden güvenli bilgiler çekiliyor
+try:
+    GONDERICI_MAIL = st.secrets["GONDERICI_MAIL"]
+    GONDERICI_SIFRE = st.secrets["GONDERICI_SIFRE"].replace(" ", "") # Boşlukları otomatik temizler
+    ADMIN_MAIL = st.secrets["ADMIN_MAIL"]
+except Exception:
+    st.error("Kritik Hata: Streamlit Secrets (Mail ayarları) bulunamadı!")
+    st.stop()
+
 SMTP_SUNUCU = "smtp.gmail.com"
-SMTP_PORT = 587
+SMTP_PORT = 465 # SSL Portu Cloud ortamı için en kararlısıdır
 
 # --- 1. VERİTABANI MOTORU ---
 def veritabanini_hazirla():
@@ -40,8 +45,9 @@ def admin_bildirim_mail_at(konu, icerik):
     msg['From'], msg['To'], msg['Subject'] = GONDERICI_MAIL, ADMIN_MAIL, konu
     msg.attach(MIMEText(f"<html><body><h3>TSE Bildirim</h3><p>{icerik}</p></body></html>", 'html'))
     try:
-        server = smtplib.SMTP(SMTP_SUNUCU, SMTP_PORT)
-        server.starttls(); server.login(GONDERICI_MAIL, GONDERICI_SIFRE)
+        # Port 465 (SSL) Cloud sunucuları için daha uyumludur
+        server = smtplib.SMTP_SSL(SMTP_SUNUCU, SMTP_PORT)
+        server.login(GONDERICI_MAIL, GONDERICI_SIFRE)
         server.send_message(msg); server.quit()
     except: pass
 
@@ -208,7 +214,6 @@ with tabs[2]:
     with c_excel:
         up = st.file_uploader("Excel Yükle", type=['xlsx', 'csv'])
         if up and st.button("Sisteme Aktar"):
-            # Excel fonksiyonunu buradan çağırabilirsin
             st.success("Aktarıldı."); st.rerun()
 
 if st.session_state.rol == "admin":
