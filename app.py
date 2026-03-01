@@ -9,6 +9,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import time
 
+# --- SAYFA YAPILANDIRMASI (MAKSİMUM GENİŞLİK İÇİN EKLENDİ) ---
+# Bu komut sayfanın tüm ekranı kaplamasını sağlar. Streamlit'te ilk komut olmalıdır.
+st.set_page_config(page_title="TSE Denetim Portalı", layout="wide")
+
 # --- TSE KURUMSAL VE MAİL AYARLARI ---
 # Streamlit Secrets üzerinden güvenli bilgiler çekiliyor
 try:
@@ -160,7 +164,8 @@ with tabs[0]:
     src = st.text_input("🔍 Filtrele (Şasi, Marka, Firma vb.):")
     if src: display_df = display_df[display_df.apply(lambda r: src.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    st.dataframe(display_df.style.apply(satir_boya, axis=1), use_container_width=True, height=600)
+    # MAKSİMUM BÜYÜKLÜK İÇİN height=800 OLARAK REVİZE EDİLDİ
+    st.dataframe(display_df.style.apply(satir_boya, axis=1), use_container_width=True, height=800)
     
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as w: display_df.to_excel(w, index=False)
