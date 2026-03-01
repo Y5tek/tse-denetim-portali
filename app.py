@@ -222,42 +222,44 @@ with tabs[2]:
                 else:
                     df_ekle = pd.read_excel(up)
                 
-                # --- YENİ EKLENEN KISIM: Excel Sütunlarını Veritabanı Diline Çevirme ---
-                # Excelde olabilecek başlıkları veritabanı başlıklarına çeviriyoruz
+                # --- DOSYAYA GÖRE BİREBİR EŞLEŞTİRME VE TEMİZLİK ---
+                # Gönderdiğiniz örnek dosyadaki başlıkları veritabanına uyarlıyoruz
                 sutun_haritasi = {
                     "BasvuruNo": "basvuru_no",
-                    "FirmaAdi": "firma_adi",
+                    "Firma": "firma_adi",
                     "Marka": "marka",
-                    "AracTipi": "arac_tipi",
+                    "Araç Kategori": "arac_kategori",
                     "Tip": "arac_tipi",
-                    "SasiNo": "sasi_no",
-                    "AracKategori": "arac_kategori",
-                    "Kategori": "arac_kategori",
                     "Varyant": "varyant",
                     "Versiyon": "versiyon",
                     "TicariAd": "ticari_ad",
                     "GtipNo": "gtip_no",
                     "Birim": "birim",
-                    "UretimUlkesi": "uretim_ulkesi",
-                    "AracSayisi": "arac_sayisi",
-                    "BasvuruTarihi": "basvuru_tarihi",
-                    "SecimTarihi": "secim_tarihi",
-                    "Il": "il",
-                    "Durum": "durum",
-                    "Notlar": "notlar"
+                    "Üretildiği Ülke": "uretim_ulkesi",
+                    "Araç Sayısı": "arac_sayisi"
                 }
                 
-                # Excel'den gelen sütun isimlerinin etrafındaki boşlukları temizleyelim ve haritaya göre eşleştirelim
+                # Sütun isimlerindeki olası boşlukları temizleyip haritaya göre yeniden adlandırıyoruz
                 df_ekle.columns = df_ekle.columns.str.strip()
                 df_ekle.rename(columns=sutun_haritasi, inplace=True)
                 
-                # Veritabanında zorunlu olan ama Excel'de olmayabilecek standart veriler:
+                # Veritabanında zorunlu olan ama Excel'de olmayan sistem verileri
                 df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
                 if 'il' not in df_ekle.columns:
                     df_ekle['il'] = st.session_state.sorumlu_il
                 if 'durum' not in df_ekle.columns:
                     df_ekle['durum'] = 'Şasi Bekliyor'
                 
+                # GÜVENLİK FİLTRESİ: Hata almamak için SADECE veritabanımızda geçerli olan sütunları bırakıyoruz
+                gecerli_sutunlar = ['basvuru_no', 'firma_adi', 'marka', 'arac_kategori', 'arac_tipi', 
+                                    'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 'birim', 'uretim_ulkesi', 
+                                    'arac_sayisi', 'sasi_no', 'basvuru_tarihi', 'secim_tarihi', 'il', 'durum', 
+                                    'notlar', 'guncelleme_tarihi', 'ekleyen_kullanici', 'silme_talebi', 'silme_nedeni']
+                
+                # Tabloyu sadece desteklenen sütunlardan ibaret hale getiriyoruz
+                df_ekle = df_ekle[[col for col in df_ekle.columns if col in gecerli_sutunlar]]
+                
+                # Veritabanına aktarma aşaması
                 conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
                 df_ekle.to_sql('denetimler', conn, if_exists='append', index=False)
                 conn.close()
