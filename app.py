@@ -13,68 +13,46 @@ import psycopg2
 from sqlalchemy import create_engine
 from contextlib import contextmanager
 import numpy as np
+import plotly.express as px
 
 # --- KULLANIM KILAVUZU METNİ ---
-KILAVUZ_METNI = """# 🇹🇷 TSE NUMUNE TAKİP PORTALI - KULLANIM KILAVUZU VE SİSTEM ÖZETİ
+KILAVUZ_METNI = """# 🇹🇷 TSE NUMUNE TAKİP PORTALI - KULLANIM KILAVUZU
 
-Bu proje, kurum içindeki başvuru, numune atama (şasi eşleştirme) ve denetim süreçlerini dijitalleştirmek, kullanıcıları illere göre yönetmek ve süreçleri otomatik e-posta bildirimleriyle hızlandırmak amacıyla geliştirilmiştir.
+Bu portal, TSE numune takip süreçlerini dijitalleştirmek için tasarlanmıştır.
 
-## 🛠 1. Teknik Altyapı ve Güvenlik
-* Arayüz (UI): Kullanıcı dostu Streamlit altyapısı kullanılmıştır.
-* Veritabanı: Bulut tabanlı PostgreSQL (Supabase) kullanılmıştır.
-* Veri Güvenliği: Şifreler ve e-posta sunucu bilgileri güvenli "Secrets" kasasında saklanmaktadır. Parolalar SHA-256 ile şifrelenmektedir.
-
-## 👥 2. Rol ve Oturum Yönetimi
-Sistemde iki farklı kullanıcı rolü bulunmaktadır: Kullanıcı ve Admin (Yönetici).
-* Yeni kayıt olan bir kullanıcı sisteme yöneticinin onayından sonra girebilir.
-* Yöneticiler tüm illerin verilerini görebilirken, standart kullanıcılar sadece kendi sorumlu oldukları illerin verilerini yönetebilirler.
-
-## 🖥 3. Sistem Sekmeleri ve Fonksiyonlar
-### 📊 Sekme 1: Ana Tablo (Sistem Kayıtları)
-Tüm verilerin izlendiği ana gösterge panelidir. Akıllı Arama ile tüm tabloda filtreleme yapılabilir ve veriler tek tıkla Excel (.xlsx) formatında bilgisayara indirilebilir.
-
-### 🛠️ Sekme 2: İşlem Paneli (Numune Kayıt Girişi)
-* Şasi Atama: "Şasi Bekliyor" durumundaki başvurulara VIN numarası girilerek "Teste Gönderildi" aşamasına geçirilir. Çift kayıt uyarısı ile koruma altındadır.
-* Güncelleme & İlave: Araçların durumları güncellenir veya silme talebi oluşturulabilir.
-
-### 📥 Sekme 3: Veri Girişi (Manuel & Excel)
-* Elden Kayıt: Tekil kayıtlar form aracılığıyla eklenebilir.
-* Excel ile Toplu Yükleme: Akıllı sütun eşleştirme, il tahmini ve mükerrer kayıt kontrolü yapılarak veriler güvenle sisteme aktarılır.
-
-### 👑 Sekme 4: Yönetici Paneli (Sadece Adminler)
-Onay bekleyen üyeler ve silme talepleri yönetilir. Kullanıcılara yetkiler atanabilir.
+## 🖥 Sistem Sekmeleri
+* **📊 Ana Tablo:** Gelişmiş filtreler ve interaktif grafiklerle verileri analiz edin.
+* **🛠️ Numune Kayıt Girişi:** Bekleyen başvurulara şasi (VIN) atayın veya mevcut durumları güncelleyin.
+* **📥 Veri Girişi:** Sisteme tekli form ile veya akıllı Excel eşleştirmesi ile toplu veri yükleyin.
+* **👤 Profilim:** Hesap şifrenizi güvenli bir şekilde güncelleyin.
+* **👑 Yönetici Paneli:** Kullanıcı yetkilerini ve silme taleplerini yönetin (Sadece Admin).
 """
 
-# --- SAYFA YAPILANDIRMASI ---
 st.set_page_config(page_title="TSE NUMUNE TAKİP PORTALI", layout="wide")
 
-# --- TSE KURUMSAL VE MAİL AYARLARI ---
+# --- AYARLAR VE GÜVENLİK ---
 try:
     GONDERICI_MAIL = st.secrets["GONDERICI_MAIL"]
     GONDERICI_SIFRE = st.secrets["GONDERICI_SIFRE"].replace(" ", "") 
     ADMIN_MAIL = st.secrets["ADMIN_MAIL"]
     DB_URI = st.secrets["DB_URI"]
 except Exception:
-    st.error("Kritik Hata: Streamlit Secrets (Mail veya Veritabanı ayarları) bulunamadı!")
+    st.error("Kritik Hata: Streamlit Secrets ayarları bulunamadı!")
     st.stop()
 
-SMTP_SUNUCU = "smtp.gmail.com"
-SMTP_PORT = 465 
+SMTP_SUNUCU, SMTP_PORT = "smtp.gmail.com", 465 
 
-# --- ŞİFRE HASHLEME ---
 def sifreyi_hashle(sifre_metni):
     return hashlib.sha256(sifre_metni.encode('utf-8')).hexdigest()
 
-# --- 1. VERİTABANI MOTORU (POSTGRESQL BAĞLANTISI) ---
+# --- VERİTABANI MOTORU ---
 engine = create_engine(DB_URI)
 
 @contextmanager
 def get_db():
     conn = psycopg2.connect(DB_URI)
-    try:
-        yield conn
-    finally:
-        conn.close()
+    try: yield conn
+    finally: conn.close()
 
 def veritabanini_hazirla():
     with get_db() as conn:
@@ -89,21 +67,19 @@ def veritabanini_hazirla():
         cursor.execute('''CREATE TABLE IF NOT EXISTS kullanicilar (
             id SERIAL PRIMARY KEY, kullanici_adi TEXT UNIQUE NOT NULL, sifre TEXT NOT NULL,
             rol TEXT NOT NULL, email TEXT, sorumlu_il TEXT, onay_durumu INTEGER DEFAULT 1, excel_yukleme_yetkisi INTEGER DEFAULT 0)''')
-        
         conn.commit()
 
         cursor.execute("SELECT COUNT(*) FROM kullanicilar WHERE rol = 'admin'")
         if cursor.fetchone()[0] == 0:
-            default_admin_hash = sifreyi_hashle("admin123")
-            cursor.execute("INSERT INTO kullanicilar (kullanici_adi, sifre, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi) VALUES (%s, %s, 'admin', %s, 'Tümü', 1, 1)", ("admin", default_admin_hash, ADMIN_MAIL))
+            cursor.execute("INSERT INTO kullanicilar (kullanici_adi, sifre, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi) VALUES (%s, %s, 'admin', %s, 'Tümü', 1, 1)", ("admin", sifreyi_hashle("admin123"), ADMIN_MAIL))
             conn.commit()
 
 veritabanini_hazirla()
 
-# --- BİLDİRİM MOTORU ---
-def admin_bildirim_mail_at(konu, icerik):
+# --- BİLDİRİM & EXCEL AKILLI YÜKLEME ---
+def mail_gonder(kime, konu, icerik):
     msg = MIMEMultipart()
-    msg['From'], msg['To'], msg['Subject'] = GONDERICI_MAIL, ADMIN_MAIL, konu
+    msg['From'], msg['To'], msg['Subject'] = GONDERICI_MAIL, kime, konu
     msg.attach(MIMEText(f"<html><body><h3>TSE Bildirim</h3><p>{icerik}</p></body></html>", 'html'))
     try:
         server = smtplib.SMTP_SSL(SMTP_SUNUCU, SMTP_PORT)
@@ -111,23 +87,8 @@ def admin_bildirim_mail_at(konu, icerik):
         server.send_message(msg); server.quit()
     except: pass
 
-def kullanici_bildirim_mail_at(kime_mail, konu, icerik):
-    msg = MIMEMultipart()
-    msg['From'], msg['To'], msg['Subject'] = GONDERICI_MAIL, kime_mail, konu
-    msg.attach(MIMEText(f"<html><body><h3>TSE Bildirim</h3><p>{icerik}</p></body></html>", 'html'))
-    try:
-        server = smtplib.SMTP_SSL(SMTP_SUNUCU, SMTP_PORT)
-        server.login(GONDERICI_MAIL, GONDERICI_SIFRE)
-        server.send_message(msg); server.quit()
-    except: pass
-
-# --- YARDIMCI İŞLEMLER ---
 def excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi):
-    mail_gidenler = []
-    
-    # Boş verileri güvenli hale getir (NaN'ları "-" veya None yap)
     df_yeni = df_yeni.replace({np.nan: None})
-    
     df_yeni.to_sql('denetimler', engine, if_exists='append', index=False)
     
     try:
@@ -136,60 +97,34 @@ def excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi):
             cursor = conn.cursor()
             for il_adi, adet in il_ozeti.items():
                 cursor.execute("SELECT email, kullanici_adi FROM kullanicilar WHERE sorumlu_il=%s AND onay_durumu=1", (il_adi,))
-                ilgili_kullanicilar = cursor.fetchall()
-                for k_mail, k_adi in ilgili_kullanicilar:
+                for k_mail, k_adi in cursor.fetchall():
                     if k_mail and "@" in k_mail: 
-                        m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
-                        m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme <b>{adet} adet</b> yeni kayıt yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
-                        threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
-                        mail_gidenler.append(f"{k_adi} ({il_adi})")
-    except Exception as mail_hata:
-        st.warning(f"Uyarı: Kayıtlar eklendi ancak mail gönderilirken bir hata oluştu: {mail_hata}")
-    
-    eklenen_sayi = len(df_yeni)
-    mesaj = f"Tebrikler! {eklenen_sayi} adet YENİ kayıt başarıyla aktarıldı."
-    if atlanan_sayi > 0:
-        mesaj += f" ({atlanan_sayi} adet mevcut başvuru numarası mükerrer olduğu için atlandı.)"
-    if len(mail_gidenler) > 0:
-        mesaj += f" Bildirim iletilenler: {', '.join(mail_gidenler)}"
-        
-    st.success(mesaj)
-    time.sleep(3)
-    st.rerun()
+                        m_icerik = f"Merhaba <b>{k_adi}</b>,<br>Sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme <b>{adet} adet</b> yeni kayıt yüklenmiştir."
+                        threading.Thread(target=mail_gonder, args=(k_mail, f"TSE Sistemi - {il_adi} İçin Yeni Veri", m_icerik)).start()
+    except: pass
+    st.success(f"Tebrikler! {len(df_yeni)} yeni kayıt başarıyla eklendi. ({atlanan_sayi} mükerrer atlandı.)")
+    time.sleep(2); st.rerun()
 
-# --- AKILLI SÜTUN EŞLEŞTİRME (YENİ) ---
 def akilli_sutun_eslestir(df_columns):
-    yeni_kolonlar = {}
+    yeni = {}
     for col in df_columns:
-        # Boşlukları sil, küçük harfe çevir, Türkçe karakterleri normalize et
-        temiz_col = str(col).lower().replace(" ", "").replace("_", "").replace(".", "")
-        temiz_col = temiz_col.replace("ş", "s").replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ç", "c").replace("ö", "o")
-        
-        if "basvuru" in temiz_col: yeni_kolonlar[col] = "basvuru_no"
-        elif "firma" in temiz_col or "kurum" in temiz_col: yeni_kolonlar[col] = "firma_adi"
-        elif "marka" in temiz_col: yeni_kolonlar[col] = "marka"
-        elif "kategori" in temiz_col: yeni_kolonlar[col] = "arac_kategori"
-        elif "tip" in temiz_col: yeni_kolonlar[col] = "arac_tipi"
-        elif "varyant" in temiz_col or "variant" in temiz_col: yeni_kolonlar[col] = "varyant"
-        elif "versiyon" in temiz_col or "version" in temiz_col: yeni_kolonlar[col] = "versiyon"
-        elif "ticari" in temiz_col: yeni_kolonlar[col] = "ticari_ad"
-        elif "gtip" in temiz_col: yeni_kolonlar[col] = "gtip_no"
-        elif "birim" in temiz_col or "sube" in temiz_col or "hizmet" in temiz_col: yeni_kolonlar[col] = "birim"
-        elif "ulke" in temiz_col: yeni_kolonlar[col] = "uretim_ulkesi"
-        elif "sayi" in temiz_col or "adet" in temiz_col: yeni_kolonlar[col] = "arac_sayisi"
-        else: yeni_kolonlar[col] = col 
-    return yeni_kolonlar
+        tc = str(col).lower().replace(" ", "").replace("_", "").replace(".", "").replace("ş", "s").replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ç", "c").replace("ö", "o")
+        if "basvuru" in tc: yeni[col] = "basvuru_no"
+        elif "firma" in tc or "kurum" in tc: yeni[col] = "firma_adi"
+        elif "marka" in tc: yeni[col] = "marka"
+        elif "kategori" in tc: yeni[col] = "arac_kategori"
+        elif "tip" in tc: yeni[col] = "arac_tipi"
+        elif "varyant" in tc or "variant" in tc: yeni[col] = "varyant"
+        elif "versiyon" in tc or "version" in tc: yeni[col] = "versiyon"
+        elif "ticari" in tc: yeni[col] = "ticari_ad"
+        elif "gtip" in tc: yeni[col] = "gtip_no"
+        elif "birim" in tc or "sube" in tc or "hizmet" in tc: yeni[col] = "birim"
+        elif "ulke" in tc: yeni[col] = "uretim_ulkesi"
+        elif "sayi" in tc or "adet" in tc: yeni[col] = "arac_sayisi"
+        else: yeni[col] = col 
+    return yeni
 
-# --- 2. DURUM SORGULARI ---
-def durum_sayilarini_al():
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM kullanicilar WHERE onay_durumu = 0")
-        onay_sayisi = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM denetimler WHERE silme_talebi = 1")
-        silme_sayisi = cursor.fetchone()[0]
-    return onay_sayisi, silme_sayisi
-
+# --- VERİ ÇEKME VE İŞLEME ---
 def verileri_getir():
     try:
         df = pd.read_sql_query("SELECT * FROM denetimler ORDER BY id DESC", engine)
@@ -201,396 +136,228 @@ def verileri_getir():
             for c in df.columns: 
                 if c not in ['Geçen Gün', 'secim_tarihi_dt']: df[c] = df[c].fillna('-')
         return df
-    except Exception:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
-def satir_boya(row): 
-    if row['durum'] == 'Şasi Bekliyor': return ['background-color: rgba(255, 193, 7, 0.3)'] * len(row)
-    elif row['durum'] == 'Tamamlandı - Olumlu': return ['background-color: rgba(40, 167, 69, 0.3)'] * len(row)
-    elif row['durum'] == 'Tamamlandı - Olumsuz': return ['background-color: rgba(220, 53, 69, 0.3)'] * len(row)
-    return [''] * len(row)
-
-# --- 3. OTURUM YÖNETİMİ ---
+# --- OTURUM YÖNETİMİ VE GİRİŞ ---
 if 'giris_yapildi' not in st.session_state:
-    st.session_state.update({
-        'giris_yapildi': False, 'kullanici_adi': "", 'rol': "", 'sorumlu_il': "", 'excel_yetkisi': 0,
-        'onay_bekleyen_excel_df': None, 'atlanan_kayit_sayisi': 0
-    })
+    st.session_state.update({'giris_yapildi': False, 'kullanici_adi': "", 'rol': "", 'sorumlu_il': "", 'excel_yetkisi': 0, 'ob_df': None, 'atlanmis': 0})
 
-def durum_guncelle_by_id(kayit_id, sasi_no, yeni_durum, notlar, starih="MEVCUT", talep_et_silme=False, silme_nedeni=""):
+def durum_guncelle(kid, sasi, durum, notlar, starih="MEVCUT", silme=False, snedeni=""):
     g_ani = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    sil_v = 1 if talep_et_silme else 0
+    sil_v = 1 if silme else 0
     with get_db() as conn:
-        cursor = conn.cursor()
-        if starih == "MEVCUT": 
-            cursor.execute('UPDATE denetimler SET sasi_no=%s, durum=%s, notlar=%s, guncelleme_tarihi=%s, silme_talebi=%s, silme_nedeni=%s WHERE id=%s', (sasi_no, yeni_durum, notlar, g_ani, sil_v, silme_nedeni, int(kayit_id)))
-        else: 
-            cursor.execute('UPDATE denetimler SET sasi_no=%s, durum=%s, secim_tarihi=%s, notlar=%s, guncelleme_tarihi=%s, silme_talebi=%s, silme_nedeni=%s WHERE id=%s', (sasi_no, yeni_durum, starih, notlar, g_ani, sil_v, silme_nedeni, int(kayit_id)))
+        c = conn.cursor()
+        if starih == "MEVCUT": c.execute('UPDATE denetimler SET sasi_no=%s, durum=%s, notlar=%s, guncelleme_tarihi=%s, silme_talebi=%s, silme_nedeni=%s WHERE id=%s', (sasi, durum, notlar, g_ani, sil_v, snedeni, int(kid)))
+        else: c.execute('UPDATE denetimler SET sasi_no=%s, durum=%s, secim_tarihi=%s, notlar=%s, guncelleme_tarihi=%s, silme_talebi=%s, silme_nedeni=%s WHERE id=%s', (sasi, durum, starih, notlar, g_ani, sil_v, snedeni, int(kid)))
         conn.commit()
-        
-    if talep_et_silme: threading.Thread(target=admin_bildirim_mail_at, args=("⚠️ YENİ SİLME TALEBİ", f"{sasi_no} için silme talebi var.")).start()
+    if silme: threading.Thread(target=mail_gonder, args=(ADMIN_MAIL, "⚠️ YENİ SİLME TALEBİ", f"{sasi} için silme talebi var.")).start()
 
-# --- 4. GİRİŞ EKRANI ---
 if not st.session_state.giris_yapildi:
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        if os.path.exists("tse_logo.png"):
-            logo_c1, logo_c2, logo_c3 = st.columns([1, 2, 1])
-            with logo_c2:
-                st.image("tse_logo.png", use_container_width=True)
-                
-        st.markdown("<h1 style='text-align: center; color: #E03131;'> TSE NUMUNE TAKİP PORTALI</h1>", unsafe_allow_html=True)
+        if os.path.exists("tse_logo.png"): st.image("tse_logo.png", use_container_width=True)
+        st.markdown("<h1 style='text-align: center; color: #E03131;'> TSE NUMUNE TAKİP</h1>", unsafe_allow_html=True)
         tg, tk = st.tabs(["🔐 Giriş Yap", "📝 Kayıt Ol"])
-        
         with tg:
-            with st.form("login_form"):
+            with st.form("login"):
                 ka, si = st.text_input("Kullanıcı Adı"), st.text_input("Şifre", type="password")
                 if st.form_submit_button("Giriş Yap", use_container_width=True):
-                    hashli_giris_sifresi = sifreyi_hashle(si) 
                     with get_db() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT rol, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar WHERE kullanici_adi=%s AND sifre=%s", (ka, hashli_giris_sifresi))
-                        u = cursor.fetchone()
-                    
+                        c = conn.cursor()
+                        c.execute("SELECT rol, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar WHERE kullanici_adi=%s AND sifre=%s", (ka, sifreyi_hashle(si)))
+                        u = c.fetchone()
                     if u:
                         if u[2]==0: st.warning("Oturum onayı bekleniyor.")
                         else: st.session_state.update({'giris_yapildi':True, 'kullanici_adi':ka, 'rol':u[0], 'sorumlu_il':u[1], 'excel_yetkisi':u[3]}); st.rerun()
-                    else: st.error("❌ Hatalı kullanıcı adı veya şifre.")
-        
+                    else: st.error("❌ Hatalı bilgi.")
         with tk:
-            with st.form("register_form"):
+            with st.form("reg"):
                 yk, ys, ye, yil = st.text_input("Kullanıcı Adı"), st.text_input("Şifre", type="password"), st.text_input("E-Posta"), st.selectbox("İl", ["Ankara", "İstanbul", "İzmir", "Bursa", "Kocaeli", "Diğer"])
-                if st.form_submit_button("Kayıt Talebi Gönder"):
+                if st.form_submit_button("Kayıt Ol"):
                     try:
-                        hashli_yeni_sifre = sifreyi_hashle(ys)
                         with get_db() as conn:
-                            cursor = conn.cursor()
-                            cursor.execute("INSERT INTO kullanicilar (kullanici_adi, sifre, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi) VALUES (%s, %s, 'kullanici', %s, %s, 0, 0)", (yk, hashli_yeni_sifre, ye, yil))
+                            conn.cursor().execute("INSERT INTO kullanicilar (kullanici_adi, sifre, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi) VALUES (%s, %s, 'kullanici', %s, %s, 0, 0)", (yk, sifreyi_hashle(ys), ye, yil))
                             conn.commit()
-                        threading.Thread(target=admin_bildirim_mail_at, args=("📝 YENİ KAYIT", f"Yeni üye talebi: {yk}")).start()
-                        st.success("Tebrikler! Talebiniz iletildi."); time.sleep(1); st.rerun()
-                    except psycopg2.IntegrityError: 
-                        st.error("Kullanıcı adı mevcut.")
+                        st.success("Talebiniz iletildi."); time.sleep(1); st.rerun()
+                    except: st.error("Kullanıcı adı mevcut.")
     st.stop()
 
-# --- 5. ANA EKRAN (GİRİŞ SONRASI) ---
-b_onay, b_silme = durum_sayilarini_al()
-toplam_bekleyen = b_onay + b_silme
+# --- ANA EKRAN YÜKLENİYOR ---
 df = verileri_getir()
+with get_db() as conn:
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM kullanicilar WHERE onay_durumu = 0")
+    b_onay = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM denetimler WHERE silme_talebi = 1")
+    b_silme = c.fetchone()[0]
 
 with st.sidebar:
-    if os.path.exists("tse_logo.png"):
-        st.image("tse_logo.png", use_container_width=True)
-        
+    if os.path.exists("tse_logo.png"): st.image("tse_logo.png", use_container_width=True)
     st.markdown("<h2 style='color: #E03131;'>TSE PANEL</h2>", unsafe_allow_html=True)
-    st.write(f"👤 **{st.session_state.kullanici_adi}**")
-    st.write(f"📍 **{st.session_state.sorumlu_il}**")
-    if st.session_state.rol == "admin" and toplam_bekleyen > 0:
-        st.error(f"🚨 {toplam_bekleyen} Bekleyen İşlem!")
-    
+    st.write(f"👤 **{st.session_state.kullanici_adi}** | 📍 **{st.session_state.sorumlu_il}**")
     st.divider()
-    
-    st.download_button(
-        label="📄 Kullanım Kılavuzunu İndir",
-        data=KILAVUZ_METNI,
-        file_name="TSE_Denetim_Portali_Kullanim_Kilavuzu.md",
-        mime="text/markdown",
-        use_container_width=True
-    )
-    
-    st.divider()
-    
-    if st.button("🚪 Oturumu Kapat", use_container_width=True):
-        st.session_state.clear(); st.rerun()
+    st.download_button("📄 Kılavuzu İndir", KILAVUZ_METNI, "Kilavuz.md", "text/markdown", use_container_width=True)
+    if st.button("🚪 Çıkış", use_container_width=True): st.session_state.clear(); st.rerun()
 
-if st.session_state.rol == "admin" and toplam_bekleyen > 0:
-    st.error(f"📢 **Yönetici Bildirimi:** Şu an onay bekleyen **{b_onay} üye** ve **{b_silme} silme talebi** var.")
+mtabs = ["📊 Ana Tablo", "🛠️ İşlem Paneli", "📥 Veri Girişi", "👤 Profilim"]
+if st.session_state.rol == "admin": mtabs.append(f"👑 Admin ({b_onay+b_silme})")
+t = st.tabs(mtabs)
 
-admin_tab_label = f"👑 Yönetici Paneli ({toplam_bekleyen})" if (st.session_state.rol == "admin" and toplam_bekleyen > 0) else "👑 Yönetici Paneli"
-main_tabs = ["📊 Ana Tablo", "🛠️ Numune Kayıt Girişi", "📥 Veri Girişi"]
-if st.session_state.rol == "admin": main_tabs.append(admin_tab_label)
-
-tabs = st.tabs(main_tabs)
-
-with tabs[0]:
-    st.subheader("Sistem Kayıtları")
-    c_m1, c_m2, c_m3 = st.columns(3)
-    c_m1.metric("Toplam", len(df))
-    c_m2.metric("Teste Gönderildi", len(df[df['durum'] == 'Teste Gönderildi']) if not df.empty else 0)
-    c_m3.metric("Olumlu", len(df[df['durum'] == 'Tamamlandı - Olumlu']) if not df.empty else 0)
-    
-    istenen = ['sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_tipi', 'firma_adi', 'arac_kategori', 'birim', 'il']
+# --- SEKME 1: ANALİTİK DASHBOARD VE TABLO ---
+with t[0]:
     if not df.empty:
-        display_df = df[[c for c in istenen if c in df.columns] + [c for c in df.columns if c not in istenen and c not in ['secim_tarihi_dt', 'silme_talebi']]]
+        g_df = df if st.session_state.rol == "admin" else df[df['il'] == st.session_state.sorumlu_il]
         
-        src = st.text_input("🔍 Filtrele (Şasi, Marka, Firma vb.):")
-        if src: display_df = display_df[display_df.apply(lambda r: src.lower() in r.astype(str).str.lower().values, axis=1)]
-        
-        st.dataframe(display_df.style.apply(satir_boya, axis=1), use_container_width=True, height=800)
-        
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as w: display_df.to_excel(w, index=False)
-        st.download_button("📥 Excel İndir", buffer.getvalue(), f"TSE_Rapor_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
-    else:
-        st.info("Sistemde henüz kayıt bulunmamaktadır.")
+        # Filtreleme Alanı
+        with st.expander("🔎 Gelişmiş Filtreleme (Daralt)"):
+            f1, f2, f3 = st.columns(3)
+            sec_durum = f1.multiselect("Duruma Göre:", g_df['durum'].unique())
+            sec_il = f2.multiselect("İle Göre:", g_df['il'].unique()) if st.session_state.rol == "admin" else [st.session_state.sorumlu_il]
+            kelime = f3.text_input("Kelime Arama (Marka, Şasi vb.):")
+            
+            if sec_durum: g_df = g_df[g_df['durum'].isin(sec_durum)]
+            if sec_il and st.session_state.rol == "admin": g_df = g_df[g_df['il'].isin(sec_il)]
+            if kelime: g_df = g_df[g_df.apply(lambda r: kelime.lower() in r.astype(str).str.lower().values, axis=1)]
 
-with tabs[1]:
-    st.subheader("İşlem Paneli")
-    i_df = pd.DataFrame() if df.empty else (df if st.session_state.rol == "admin" else df[(df['il'] == st.session_state.sorumlu_il) | (df['ekleyen_kullanici'] == st.session_state.kullanici_adi)])
-    
-    p_id = st.session_state.get('onay_bekleyen_sasi_id')
+        # Özet Metrikler
+        c_m1, c_m2, c_m3 = st.columns(3)
+        c_m1.metric("Toplam Listelenen", len(g_df))
+        c_m2.metric("Teste Gönderildi", len(g_df[g_df['durum'] == 'Teste Gönderildi']))
+        c_m3.metric("Olumlu", len(g_df[g_df['durum'] == 'Tamamlandı - Olumlu']))
+
+        # Grafikler
+        if len(g_df) > 0:
+            gc1, gc2 = st.columns(2)
+            with gc1:
+                fig1 = px.pie(g_df, names='durum', title='Durum Dağılımı', hole=0.3)
+                st.plotly_chart(fig1, use_container_width=True)
+            with gc2:
+                if st.session_state.rol == "admin":
+                    fig2 = px.bar(g_df['il'].value_counts().reset_index(), x='il', y='count', title='İllere Göre Dağılım', color='il')
+                else:
+                    fig2 = px.bar(g_df['marka'].value_counts().reset_index().head(10), x='marka', y='count', title='En Çok İşlem Yapılan Markalar', color='marka')
+                st.plotly_chart(fig2, use_container_width=True)
+
+        # Tablo
+        istenen = ['sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_tipi', 'firma_adi', 'il']
+        goster_df = g_df[[c for c in istenen if c in g_df.columns] + [c for c in g_df.columns if c not in istenen and c not in ['secim_tarihi_dt', 'silme_talebi']]]
+        st.dataframe(goster_df, use_container_width=True, height=400)
+        
+        b = io.BytesIO(); goster_df.to_excel(b, index=False)
+        st.download_button("📥 Tabloyu Excel Olarak İndir", b.getvalue(), "Rapor.xlsx")
+    else: st.info("Sistemde kayıt yok.")
+
+# --- SEKME 2: İŞLEM PANELİ ---
+with t[1]:
+    i_df = df if st.session_state.rol == "admin" else df[(df['il'] == st.session_state.sorumlu_il) | (df['ekleyen_kullanici'] == st.session_state.kullanici_adi)]
+    p_id = st.session_state.get('o_id')
     
     if p_id:
-        st.warning("⚠️ DİKKAT: Bu Firma, Marka ve Araç Tipi kombinasyonuna sahip başka bir kayıt zaten sistemde mevcut! Yine de bu şasiyi kaydetmek istiyor musunuz?")
-        c_evet, c_hayir = st.columns(2)
-        
-        with c_evet:
-            if st.button("✅ Devam (Kaydet)", use_container_width=True):
-                try:
-                    durum_guncelle_by_id(p_id, st.session_state.onay_bekleyen_sasi_no, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d"))
-                    st.session_state.update({'onay_bekleyen_sasi_id': None, 'onay_bekleyen_sasi_no': None}); st.rerun()
-                except psycopg2.IntegrityError:
-                    st.error("❌ Hata: Bu Şasi Numarası sistemde zaten mevcut!")
-                    st.session_state.update({'onay_bekleyen_sasi_id': None, 'onay_bekleyen_sasi_no': None})
-        
-        with c_hayir:
-            if st.button("❌ Vazgeç (İptal)", use_container_width=True):
-                st.session_state.update({'onay_bekleyen_sasi_id': None, 'onay_bekleyen_sasi_no': None})
-                st.rerun()
+        st.warning("⚠️ Çift Kayıt Riski! Yinede kaydetmek istiyor musunuz?")
+        ce, ch = st.columns(2)
+        if ce.button("✅ Devam"): 
+            durum_guncelle(p_id, st.session_state.o_no, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d"))
+            st.session_state.update({'o_id': None, 'o_no': None}); st.rerun()
+        if ch.button("❌ İptal"): st.session_state.update({'o_id': None, 'o_no': None}); st.rerun()
     else:
-        c_left, c_right = st.columns(2)
-        with c_left:
+        cl, cr = st.columns(2)
+        with cl:
             st.markdown("#### 🆕 Şasi Atama")
             if not i_df.empty:
                 b_list = i_df[i_df['durum'] == 'Şasi Bekliyor']
-                if not b_list.empty:
-                    sel = st.selectbox("Başvuru:", options=(b_list['id'].astype(str) + " | " + b_list['basvuru_no'].astype(str)).tolist(), index=None)
-                    if sel:
-                        sid = int(sel.split(" |")[0]); row_m = b_list[b_list['id'] == sid].iloc[0]
-                        vin = st.text_input("VIN Numarası")
-                        if st.button("Kaydet ve Teste Gönder"):
-                            if not vin.strip():
-                                st.error("Lütfen bir Şasi (VIN) Numarası giriniz!")
-                            else:
-                                try:
-                                    with get_db() as conn:
-                                        cursor = conn.cursor()
-                                        cursor.execute('SELECT id FROM denetimler WHERE firma_adi=%s AND marka=%s AND arac_tipi=%s AND id != %s', (row_m['firma_adi'], row_m['marka'], row_m['arac_tipi'], sid))
-                                        once = cursor.fetchone()
-                                    
-                                    if once: 
-                                        st.session_state.update({'onay_bekleyen_sasi_id': sid, 'onay_bekleyen_sasi_no': vin}); st.rerun()
-                                    else: 
-                                        durum_guncelle_by_id(sid, vin, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d")); st.rerun()
-                                except psycopg2.IntegrityError:
-                                    st.error("❌ Hata: Bu Şasi Numarası sistemde zaten kayıtlı!")
-                else:
-                    st.info("Şasi bekleyen başvuru bulunmamaktadır.")
-                            
-        with c_right:
+                sel = st.selectbox("Başvuru:", options=(b_list['id'].astype(str) + " | " + b_list['basvuru_no'].astype(str)).tolist(), index=None) if not b_list.empty else None
+                if sel:
+                    sid = int(sel.split(" |")[0]); rm = b_list[b_list['id'] == sid].iloc[0]
+                    vin = st.text_input("VIN Numarası")
+                    if st.button("Kaydet ve Gönder") and vin:
+                        try:
+                            with get_db() as conn:
+                                cur = conn.cursor()
+                                cur.execute('SELECT id FROM denetimler WHERE firma_adi=%s AND marka=%s AND arac_tipi=%s AND id != %s', (rm['firma_adi'], rm['marka'], rm['arac_tipi'], sid))
+                                if cur.fetchone(): st.session_state.update({'o_id': sid, 'o_no': vin}); st.rerun()
+                                else: durum_guncelle(sid, vin, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d")); st.rerun()
+                        except: st.error("Şasi mevcut!")
+        with cr:
             st.markdown("#### 🔍 Güncelleme & İlave")
             if not i_df.empty:
-                i_list = i_df[i_df['durum'] != 'Şasi Bekliyor']
-                if not i_list.empty:
-                    srch = st.selectbox("Şasi/Firma Ara:", options=(i_list['id'].astype(str) + " | " + i_list['sasi_no'].astype(str)).tolist(), index=None)
-                    if srch:
-                        sid = int(srch.split(" |")[0]); cur = i_list[i_list['id'] == sid].iloc[0]
-                        with st.form("upd_form"):
-                            nd = st.selectbox("Yeni Durum", ["Teste Gönderildi", "Tamamlandı - Olumlu", "Tamamlandı - Olumsuz", "Reddedildi"])
-                            sl = st.checkbox("Silme Talebi")
-                            if st.form_submit_button("Güncelle"):
-                                durum_guncelle_by_id(sid, cur['sasi_no'], nd, "", talep_et_silme=sl, silme_nedeni="Talep Edildi")
-                                st.rerun()
-                else:
-                    st.info("Güncellenecek kayıt bulunmamaktadır.")
+                ilist = i_df[i_df['durum'] != 'Şasi Bekliyor']
+                sr = st.selectbox("Şasi/Firma:", options=(ilist['id'].astype(str) + " | " + ilist['sasi_no'].astype(str)).tolist(), index=None) if not ilist.empty else None
+                if sr:
+                    sid = int(sr.split(" |")[0]); cu = ilist[ilist['id'] == sid].iloc[0]
+                    with st.form("upd"):
+                        nd = st.selectbox("Yeni Durum", ["Teste Gönderildi", "Tamamlandı - Olumlu", "Tamamlandı - Olumsuz"])
+                        sl = st.checkbox("Silme Talebi")
+                        if st.form_submit_button("Güncelle"): durum_guncelle(sid, cu['sasi_no'], nd, "", silme=sl, snedeni="Talep"); st.rerun()
 
-with tabs[2]:
-    st.subheader("📥 Veri Girişi")
-    
-    if st.session_state.get('onay_bekleyen_excel_df') is not None:
-        st.warning("⚠️ DİKKAT: Yüklemeye çalıştığınız dosyadaki bazı kayıtların 'Firma, Marka ve Araç Tipi' bilgileri sistemde zaten mevcut! Yine de tabloya eklemek istiyor musunuz?")
-        
-        co1, co2 = st.columns(2)
-        with co1:
-            if st.button("✅ Devam (Tabloya Ekle)", use_container_width=True):
-                df_gecici = st.session_state.onay_bekleyen_excel_df
-                atlanmis = st.session_state.atlanan_kayit_sayisi
-                
-                st.session_state.onay_bekleyen_excel_df = None
-                st.session_state.atlanan_kayit_sayisi = 0
-                
-                excel_kaydet_ve_mail_at(df_gecici, atlanmis)
-                
-        with co2:
-            if st.button("❌ Vazgeç (İptal Et)", use_container_width=True):
-                st.session_state.onay_bekleyen_excel_df = None
-                st.session_state.atlanan_kayit_sayisi = 0
-                st.rerun()
-
+# --- SEKME 3: VERİ GİRİŞİ ---
+with t[2]:
+    if st.session_state.ob_df is not None:
+        st.warning("⚠️ Mükerrer firma/marka çakışması! Yinede ekle?")
+        c1, c2 = st.columns(2)
+        if c1.button("✅ Ekle"): 
+            excel_kaydet_ve_mail_at(st.session_state.ob_df, st.session_state.atlanmis)
+            st.session_state.update({'ob_df': None, 'atlanmis': 0}); st.rerun()
+        if c2.button("❌ İptal"): st.session_state.update({'ob_df': None, 'atlanmis': 0}); st.rerun()
     else:
-        c_form, c_excel = st.columns(2)
-        with c_form:
-            with st.form("manuel_form"):
-                st.write("Elden Kayıt")
+        cf, ce = st.columns(2)
+        with cf:
+            with st.form("man"):
                 bn, fa, ma, ti, sn = st.text_input("B.No"), st.text_input("Firma"), st.text_input("Marka"), st.text_input("Tip"), st.text_input("Şasi")
                 if st.form_submit_button("Ekle"):
                     try:
-                        with get_db() as conn:
-                            cursor = conn.cursor()
-                            cursor.execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, secim_tarihi, il) VALUES (%s,%s,%s,%s,%s, 'Teste Gönderildi', %s, %s, %s)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il))
-                            conn.commit()
-                        st.success("Kayıt Eklendi.")
-                        st.rerun()
-                    except psycopg2.IntegrityError:
-                        st.error("Bu şasi numarası sistemde mevcut!")
-        
-        with c_excel:
-            up = st.file_uploader("Excel Yükle", type=['xlsx', 'csv'])
-            if up and st.button("Sisteme Aktar"):
-                try:
-                    if up.name.endswith('.csv'):
-                        df_ekle = pd.read_csv(up)
-                    else:
-                        df_ekle = pd.read_excel(up)
-                    
-                    # Akıllı eşleştirme fonksiyonunu çağırıyoruz
-                    sutun_haritasi = akilli_sutun_eslestir(df_ekle.columns)
-                    df_ekle.rename(columns=sutun_haritasi, inplace=True)
-                    
-                    df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
-                    if 'durum' not in df_ekle.columns:
-                        df_ekle['durum'] = 'Şasi Bekliyor'
-                        
-                    if 'basvuru_tarihi' not in df_ekle.columns:
-                        df_ekle['basvuru_tarihi'] = datetime.now().strftime("%Y-%m-%d")
-                    
-                    def il_tahmin_et(birim_metni):
-                        if pd.isna(birim_metni): return st.session_state.sorumlu_il
-                        metin = str(birim_metni).upper()
-                        if "ANKARA" in metin: return "Ankara"
-                        elif "İSTANBUL" in metin or "ISTANBUL" in metin: return "İstanbul"
-                        elif "İZMİR" in metin or "IZMIR" in metin: return "İzmir"
-                        elif "BURSA" in metin: return "Bursa"
-                        elif "KOCAELİ" in metin or "KOCAELI" in metin: return "Kocaeli"
-                        return st.session_state.sorumlu_il 
-
-                    if 'birim' in df_ekle.columns:
-                        df_ekle['il'] = df_ekle['birim'].apply(il_tahmin_et)
-                    elif 'il' not in df_ekle.columns:
-                        df_ekle['il'] = st.session_state.sorumlu_il
-                    
-                    gecerli_sutunlar = ['basvuru_no', 'firma_adi', 'marka', 'arac_kategori', 'arac_tipi', 
-                                        'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 'birim', 'uretim_ulkesi', 
-                                        'arac_sayisi', 'sasi_no', 'basvuru_tarihi', 'secim_tarihi', 'il', 'durum', 
-                                        'notlar', 'guncelleme_tarihi', 'ekleyen_kullanici', 'silme_talebi', 'silme_nedeni']
-                    
-                    df_ekle = df_ekle[[col for col in df_ekle.columns if col in gecerli_sutunlar]]
-                    
-                    mevcut_kayitlar = pd.read_sql_query("SELECT basvuru_no, firma_adi, marka, arac_tipi FROM denetimler", engine)
-                    
-                    mevcut_basvuru_listesi = mevcut_kayitlar['basvuru_no'].astype(str).tolist() if not mevcut_kayitlar.empty else []
-                    df_ekle['basvuru_no_str'] = df_ekle['basvuru_no'].astype(str)
-                    
-                    df_yeni = df_ekle[~df_ekle['basvuru_no_str'].isin(mevcut_basvuru_listesi)].copy()
-                    df_yeni.drop(columns=['basvuru_no_str'], inplace=True)
-                    atlanan_sayi = len(df_ekle) - len(df_yeni)
-                    
-                    if len(df_yeni) == 0:
-                        st.warning("⚠️ Yüklediğiniz dosyadaki tüm kayıtlar zaten sistemde mevcut! Mükerrer kayıt engellendi.")
-                    else:
-                        cakisma_var = False
-                        if not mevcut_kayitlar.empty:
-                            mevcut_str = (mevcut_kayitlar['firma_adi'].astype(str) + mevcut_kayitlar['marka'].astype(str) + mevcut_kayitlar['arac_tipi'].astype(str)).str.lower().str.replace(" ", "")
-                            yeni_str = (df_yeni['firma_adi'].astype(str) + df_yeni['marka'].astype(str) + df_yeni['arac_tipi'].astype(str)).str.lower().str.replace(" ", "")
-                            
-                            cakisma_var = yeni_str.isin(mevcut_str).any()
-                        
-                        if cakisma_var:
-                            st.session_state.onay_bekleyen_excel_df = df_yeni
-                            st.session_state.atlanan_kayit_sayisi = atlanan_sayi
-                            st.rerun()
-                        else:
-                            excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi)
-                            
-                except Exception as e:
-                    st.error(f"Aktarım sırasında kritik bir hata oluştu: {e}")
-
-if st.session_state.rol == "admin":
-    with tabs[3]:
-        st.subheader("👑 Yönetici Paneli")
-        
-        co, cs = st.columns(2)
-        with co:
-            st.markdown(f"**Onay Bekleyen Üyeler ({b_onay})**")
-            k_df = pd.read_sql_query("SELECT * FROM kullanicilar WHERE onay_durumu=0", engine)
-            
-            for _, r in k_df.iterrows():
-                st.write(f"👤 {r['kullanici_adi']}")
-                if st.button("Onayla", key=f"o_{r['id']}"):
-                    with get_db() as c:
-                        c.cursor().execute("UPDATE kullanicilar SET onay_durumu=1 WHERE id=%s", (r['id'],))
-                        c.commit()
-                    st.rerun()
-        with cs:
-            st.markdown(f"**Silme Talepleri ({b_silme})**")
-            if not df.empty:
-                for _, r in df[df['silme_talebi']==1].iterrows():
-                    st.write(f"🗑️ {r['sasi_no']}")
-                    if st.button("Kalıcı Sil", key=f"sil_{r['id']}"):
                         with get_db() as c:
-                            c.cursor().execute("DELETE FROM denetimler WHERE id=%s", (r['id'],))
+                            c.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, secim_tarihi, il) VALUES (%s,%s,%s,%s,%s,%s,%s)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il))
                             c.commit()
-                        st.rerun()
-
-        st.divider() 
-
-        st.subheader("👥 Kullanıcı Yönetimi")
-        
-        tum_kullanicilar_df = pd.read_sql_query("SELECT id, kullanici_adi, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar", engine)
-        
-        st.dataframe(tum_kullanicilar_df, use_container_width=True)
-
-        c_yetki, c_kayit_sil, c_kullanici_sil = st.columns(3)
-        
-        with c_yetki:
-            st.markdown("**Excel Yükleme Yetkisi Düzenle**")
-            secili_kullanici = st.selectbox("Kullanıcı Seçin", tum_kullanicilar_df['kullanici_adi'].tolist(), key="yetki_kullanici")
-            if secili_kullanici:
-                mevcut_yetki = tum_kullanicilar_df[tum_kullanicilar_df['kullanici_adi'] == secili_kullanici]['excel_yukleme_yetkisi'].iloc[0]
-                yeni_yetki = st.radio("Yetki Durumu:", [1, 0], index=0 if mevcut_yetki == 1 else 1, format_func=lambda x: "Yetkili (1)" if x == 1 else "Yetkisiz (0)")
-                if st.button("Yetkiyi Güncelle"):
-                    with get_db() as c:
-                        c.cursor().execute("UPDATE kullanicilar SET excel_yukleme_yetkisi=%s WHERE kullanici_adi=%s", (yeni_yetki, secili_kullanici))
-                        c.commit()
-                    st.success(f"{secili_kullanici} yetkisi güncellendi.")
-                    time.sleep(1); st.rerun()
-
-        with c_kayit_sil:
-            st.markdown("**Doğrudan Kayıt Silme**")
-            st.info("⚠️ Silinen kayıtlar geri getirilemez.")
-            if not df.empty:
-                silinecek_secim = st.selectbox("Silinecek Kaydı Seç (Şasi veya Başvuru No)", options=["Seçiniz..."] + (df['id'].astype(str) + " | Şasi: " + df['sasi_no'].fillna('-').astype(str) + " | Başvuru: " + df['basvuru_no'].fillna('-').astype(str)).tolist())
-                if silinecek_secim != "Seçiniz..." and st.button("🚨 Kaydı Kalıcı Sil"):
-                    sil_id = int(silinecek_secim.split(" |")[0])
-                    with get_db() as c:
-                        c.cursor().execute("DELETE FROM denetimler WHERE id=%s", (sil_id,))
-                        c.commit()
-                    st.success("Kayıt kalıcı olarak silindi.")
-                    time.sleep(1); st.rerun()
-            else:
-                st.write("Silinecek kayıt yok.")
+                        st.success("Eklendi."); st.rerun()
+                    except: st.error("Şasi mevcut!")
+        with ce:
+            up = st.file_uploader("Excel Yükle", type=['xlsx'])
+            if up and st.button("Aktar"):
+                df_ekle = pd.read_excel(up)
+                df_ekle.rename(columns=akilli_sutun_eslestir(df_ekle.columns), inplace=True)
+                df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
+                if 'durum' not in df_ekle.columns: df_ekle['durum'] = 'Şasi Bekliyor'
+                if 'il' not in df_ekle.columns: df_ekle['il'] = st.session_state.sorumlu_il
                 
-        with c_kullanici_sil:
-            st.markdown("**Kullanıcı Hesabını Sil**")
-            st.info("⚠️ Silinen kullanıcı geri getirilemez.")
-            silinecek_kullanici = st.selectbox("Silinecek Kullanıcıyı Seçin", ["Seçiniz..."] + tum_kullanicilar_df['kullanici_adi'].tolist(), key="sil_kullanici_sec")
-            
-            if silinecek_kullanici != "Seçiniz..." and st.button("🚨 Kullanıcıyı Sil"):
-                if silinecek_kullanici == st.session_state.kullanici_adi:
-                    st.error("Kendi hesabınızı silemezsiniz!")
-                else:
-                    with get_db() as c:
-                        c.cursor().execute("DELETE FROM kullanicilar WHERE kullanici_adi=%s", (silinecek_kullanici,))
-                        c.commit()
-                    st.success(f"{silinecek_kullanici} kullanıcısı sistemden silindi.")
-                    time.sleep(1); st.rerun()
+                df_ekle = df_ekle[[c for c in df_ekle.columns if c in ['basvuru_no', 'firma_adi', 'marka', 'arac_tipi', 'sasi_no', 'il', 'durum', 'ekleyen_kullanici']]]
+                m_bas = pd.read_sql_query("SELECT basvuru_no FROM denetimler", engine)['basvuru_no'].astype(str).tolist()
+                
+                df_yeni = df_ekle[~df_ekle['basvuru_no'].astype(str).isin(m_bas)].copy()
+                if len(df_yeni) > 0: st.session_state.update({'ob_df': df_yeni, 'atlanmis': len(df_ekle)-len(df_yeni)}); st.rerun()
+                else: st.warning("Hepsi sistemde mevcut!")
+
+# --- SEKME 4: PROFİLİM ---
+with t[3]:
+    st.subheader("Güvenlik Ayarları")
+    with st.form("profil_form"):
+        eski = st.text_input("Mevcut Şifreniz", type="password")
+        yeni = st.text_input("Yeni Şifreniz", type="password")
+        yeni_tekrar = st.text_input("Yeni Şifre (Tekrar)", type="password")
+        if st.form_submit_button("Şifremi Güncelle"):
+            if yeni != yeni_tekrar: st.error("Yeni şifreler eşleşmiyor!")
+            else:
+                with get_db() as conn:
+                    c = conn.cursor()
+                    c.execute("SELECT id FROM kullanicilar WHERE kullanici_adi=%s AND sifre=%s", (st.session_state.kullanici_adi, sifreyi_hashle(eski)))
+                    if c.fetchone():
+                        c.execute("UPDATE kullanicilar SET sifre=%s WHERE kullanici_adi=%s", (sifreyi_hashle(yeni), st.session_state.kullanici_adi))
+                        conn.commit()
+                        st.success("Şifreniz başarıyla güncellendi!"); time.sleep(1); st.session_state.clear(); st.rerun()
+                    else: st.error("Mevcut şifreniz hatalı!")
+
+# --- SEKME 5: ADMİN (Eğer yetkiliyse) ---
+if st.session_state.rol == "admin":
+    with t[4]:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Onay Bekleyenler**")
+            for _, r in pd.read_sql_query("SELECT * FROM kullanicilar WHERE onay_durumu=0", engine).iterrows():
+                if st.button(f"Onayla: {r['kullanici_adi']}", key=f"o_{r['id']}"):
+                    with get_db() as c: c.cursor().execute("UPDATE kullanicilar SET onay_durumu=1 WHERE id=%s", (r['id'],)); c.commit()
+                    st.rerun()
+        with c2:
+            st.markdown("**Silme Talepleri**")
+            for _, r in df[df['silme_talebi']==1].iterrows():
+                if st.button(f"Kalıcı Sil: {r['sasi_no']}", key=f"s_{r['id']}"):
+                    with get_db() as c: c.cursor().execute("DELETE FROM denetimler WHERE id=%s", (r['id'],)); c.commit()
+                    st.rerun()
