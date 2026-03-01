@@ -254,27 +254,20 @@ with tabs[2]:
                 
                 df_ekle = df_ekle[[col for col in df_ekle.columns if col in gecerli_sutunlar]]
                 
-                # --- ÇÖZÜM 1: MÜKERRER KAYIT (ÇİFT KAYIT) KONTROLÜ ---
                 conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-                
-                # Veritabanındaki mevcut başvuru numaralarını çekiyoruz
                 mevcut_kayitlar = pd.read_sql_query("SELECT basvuru_no FROM denetimler", conn)
                 mevcut_basvuru_listesi = mevcut_kayitlar['basvuru_no'].astype(str).tolist()
                 
-                # Excel'deki verilerin başvuru numarasını string (metin) formata çevirip karşılaştırıyoruz
                 df_ekle['basvuru_no_str'] = df_ekle['basvuru_no'].astype(str)
-                # SADECE veritabanında olmayanları (yeni olanları) alıyoruz
                 df_yeni = df_ekle[~df_ekle['basvuru_no_str'].isin(mevcut_basvuru_listesi)].copy()
-                df_yeni.drop(columns=['basvuru_no_str'], inplace=True) # Karşılaştırma sütununu siliyoruz
+                df_yeni.drop(columns=['basvuru_no_str'], inplace=True)
                 
                 if len(df_yeni) == 0:
                     st.warning("⚠️ Yüklediğiniz dosyadaki tüm kayıtlar zaten sistemde mevcut! Mükerrer kayıt engellendi.")
                     conn.close()
                 else:
-                    # Sadece YENİ kayıtları veritabanına ekliyoruz
                     df_yeni.to_sql('denetimler', conn, if_exists='append', index=False)
                     
-                    # --- ÇÖZÜM 2: GÜVENLİ KULLANICI BİLDİRİM MAİLİ ---
                     mail_gidenler = []
                     try:
                         unique_iller = df_yeni['il'].unique().tolist()
@@ -282,7 +275,7 @@ with tabs[2]:
                         for il_adi in unique_iller:
                             ilgili_kullanicilar = cursor.execute("SELECT email, kullanici_adi FROM kullanicilar WHERE sorumlu_il=? AND onay_durumu=1", (il_adi,)).fetchall()
                             for k_mail, k_adi in ilgili_kullanicilar:
-                                if k_mail and "@" in k_mail: # Geçerli bir e-posta mı diye basit bir kontrol
+                                if k_mail and "@" in k_mail: 
                                     m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
                                     m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme yeni veri yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
                                     threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
@@ -292,7 +285,6 @@ with tabs[2]:
                     
                     conn.close()
                     
-                    # Kullanıcıya detaylı sonuç mesajı gösteriyoruz
                     eklenen_sayi = len(df_yeni)
                     atlanan_sayi = len(df_ekle) - eklenen_sayi
                     
@@ -303,7 +295,7 @@ with tabs[2]:
                         mesaj += f" Bildirim iletilenler: {', '.join(mail_gidenler)}"
                         
                     st.success(mesaj)
-                    time.sleep(3) # Kullanıcının mesajı okuyabilmesi için biraz süre tanıdık
+                    time.sleep(3)
                     st.rerun()
             except Exception as e:
                 st.error(f"Aktarım sırasında kritik bir hata oluştu: {e}")
@@ -311,6 +303,8 @@ with tabs[2]:
 if st.session_state.rol == "admin":
     with tabs[3]:
         st.subheader("👑 Yönetici Paneli")
+        
+        # --- ONAY VE SİLME TALEPLERİ ---
         co, cs = st.columns(2)
         with co:
             st.markdown(f"**Onay Bekleyen Üyeler ({b_onay})**")
@@ -325,3 +319,45 @@ if st.session_state.rol == "admin":
                 st.write(f"🗑️ {r['sasi_no']}")
                 if st.button("Kalıcı Sil", key=f"sil_{r['id']}"):
                     c = sqlite3.connect('tse_v4.db', check_same_thread=False); c.execute("DELETE FROM denetimler WHERE id=?", (r['id'],)); c.commit(); c.close(); st.rerun()
+
+        st.divider() # Görsel bir ayırıcı çizgi
+
+        # --- YENİ EKLENEN: KULLANICI BİLGİLERİ VE YETKİLENDİRME ---
+        st.subheader("👥 Kullanıcı Yönetimi")
+        conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
+        tum_kullanicilar_df = pd.read_sql_query("SELECT id, kullanici_adi, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar", conn)
+        
+        # Kullanıcıların tablosunu gösteriyoruz
+        st.dataframe(tum_kullanicilar_df, use_container_width=True)
+
+        c_yetki, c_kayit_sil = st.columns(2)
+        
+        with c_yetki:
+            st.markdown("**Excel Yükleme Yetkisi Düzenle**")
+            secili_kullanici = st.selectbox("Kullanıcı Seçin", tum_kullanicilar_df['kullanici_adi'].tolist(), key="yetki_kullanici")
+            if secili_kullanici:
+                mevcut_yetki = tum_kullanicilar_df[tum_kullanicilar_df['kullanici_adi'] == secili_kullanici]['excel_yukleme_yetkisi'].iloc[0]
+                yeni_yetki = st.radio("Yetki Durumu:", [1, 0], index=0 if mevcut_yetki == 1 else 1, format_func=lambda x: "Yetkili (1)" if x == 1 else "Yetkisiz (0)")
+                if st.button("Yetkiyi Güncelle"):
+                    c = sqlite3.connect('tse_v4.db', check_same_thread=False)
+                    c.execute("UPDATE kullanicilar SET excel_yukleme_yetkisi=? WHERE kullanici_adi=?", (yeni_yetki, secili_kullanici))
+                    c.commit(); c.close()
+                    st.success(f"{secili_kullanici} kullanıcısının yetkisi güncellendi.")
+                    time.sleep(1); st.rerun()
+
+        # --- YENİ EKLENEN: YÖNETİCİ DOĞRUDAN KAYIT SİLME ---
+        with c_kayit_sil:
+            st.markdown("**Tablodan Doğrudan Kayıt Silme**")
+            st.info("⚠️ Buradan silinen kayıtlar geri getirilemez.")
+            # Silinecek kaydı arayarak bulması için seçenek sunuyoruz
+            silinecek_secim = st.selectbox("Silinecek Kaydı Seç (Şasi veya Başvuru No)", options=["Seçiniz..."] + (df['id'].astype(str) + " | Şasi: " + df['sasi_no'] + " | Başvuru: " + df['basvuru_no']).tolist())
+            
+            if silinecek_secim != "Seçiniz..." and st.button("🚨 Kaydı Kalıcı Olarak Sil"):
+                sil_id = int(silinecek_secim.split(" |")[0])
+                c = sqlite3.connect('tse_v4.db', check_same_thread=False)
+                c.execute("DELETE FROM denetimler WHERE id=?", (sil_id,))
+                c.commit(); c.close()
+                st.success("Kayıt sistemden kalıcı olarak silindi.")
+                time.sleep(1); st.rerun()
+        
+        conn.close()
