@@ -204,71 +204,96 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("📥 Veri Girişi")
-    # ... (Sol sütundaki manuel form kısmı aynı kalabilir)
     
+    # İki sütun oluşturuyoruz. Eğer bu satır yoksa NameError: c_excel hatası alırsın.
+    c_form, c_excel = st.columns(2)
+    
+    with c_form:
+        st.markdown("### 📝 Elden Kayıt")
+        with st.form("manuel_form"):
+            bn = st.text_input("Başvuru No")
+            fa = st.text_input("Firma Adı")
+            ma = st.text_input("Marka")
+            ti = st.text_input("Araç Tipi")
+            sn = st.text_input("Şasi No (Opsiyonel)")
+            
+            if st.form_submit_button("Sisteme Ekle"):
+                if fa and ti:
+                    conn = sqlite3.connect('tse_v4.db')
+                    try:
+                        conn.cursor().execute("""INSERT INTO denetimler 
+                            (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, il, ekleyen_kullanici) 
+                            VALUES (?,?,?,?,?,?, ?, ?, ?)""", 
+                            (fa, ma, ti, sn if sn else None, bn, 'Şasi Bekliyor', 
+                             datetime.now().strftime("%Y-%m-%d"), 
+                             st.session_state.sorumlu_il, st.session_state.kullanici_adi))
+                        conn.commit()
+                        st.success("Kayıt eklendi!")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Veritabanı hatası: {e}")
+                    finally:
+                        conn.close()
+                else:
+                    st.warning("Firma Adı ve Araç Tipi boş bırakılamaz.")
+
     with c_excel:
-        st.write("### Excel ile Toplu Yükleme")
-        st.info("İpucu: Sütun isimleri 'Firma Adı', 'Marka', 'Başvuru No' gibi benzer isimler olabilir.")
+        st.markdown("### 📥 Excel ile Toplu Yükleme")
+        st.info("Sütunlar: 'Firma Adı', 'Marka', 'Başvuru No', 'Tip' vb. olabilir.")
         
-        up = st.file_uploader("Dosya Seçin", type=['xlsx', 'csv'], key="excel_uploader")
+        up = st.file_uploader("Excel veya CSV Seçin", type=['xlsx', 'csv'], key="uploader_v2")
         
         if up:
             try:
                 # Veriyi oku
                 df_excel = pd.read_excel(up) if up.name.endswith('.xlsx') else pd.read_csv(up)
                 
-                # Sütun isimlerini normalize et (Küçük harf yap ve boşlukları temizle)
-                # Örn: "Firma Adı " -> "firmaadi"
+                # Sütun isimlerini normalize et (Boşlukları ve büyük/küçük harfi temizle)
                 df_excel.columns = [str(c).strip().lower().replace(" ", "").replace("_", "") for c in df_excel.columns]
                 
-                st.write("Sistem tarafından algılanan veriler (İlk 3 satır):")
-                st.dataframe(df_excel.head(3))
+                st.write("📌 Algılanan Örnek Veri:")
+                st.dataframe(df_excel.head(2))
 
-                if st.button("Veritabanına Aktar", use_container_width=True):
+                if st.button("Verileri Veritabanına Aktar"):
                     conn = sqlite3.connect('tse_v4.db')
                     basarili, hata = 0, 0
                     
                     for _, row in df_excel.iterrows():
                         try:
-                            # Esnek sütun yakalama fonksiyonu
-                            def get_val(keys, default="-"):
+                            # Sütun eşleştirme yardımı
+                            def get_v(keys):
                                 for k in keys:
                                     if k in df_excel.columns:
                                         val = row[k]
-                                        return str(val) if pd.notnull(val) else default
-                                return default
+                                        return str(val) if pd.notnull(val) else "-"
+                                return "-"
 
-                            # Veritabanı sütunu : Olası Excel başlıkları
-                            data = (
-                                get_val(['basvuruno', 'basvuru', 'no']),
-                                get_val(['firmaadi', 'firma', 'kurum']),
-                                get_val(['marka']),
-                                get_val(['aractipi', 'tip', 'model']),
-                                get_val(['arackategori', 'kategori']),
-                                get_val(['gtipno', 'gtip']),
+                            conn.cursor().execute("""
+                                INSERT INTO denetimler 
+                                (basvuru_no, firma_adi, marka, arac_tipi, durum, basvuru_tarihi, il, ekleyen_kullanici) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                get_v(['basvuruno', 'basvuru', 'no']),
+                                get_v(['firmaadi', 'firma', 'kurum', 'unvan']),
+                                get_v(['marka']),
+                                get_v(['aractipi', 'tip', 'model']),
                                 'Şasi Bekliyor',
                                 datetime.now().strftime("%Y-%m-%d"),
                                 st.session_state.sorumlu_il,
                                 st.session_state.kullanici_adi
-                            )
-
-                            conn.cursor().execute("""
-                                INSERT INTO denetimler 
-                                (basvuru_no, firma_adi, marka, arac_tipi, arac_kategori, gtip_no, 
-                                 durum, basvuru_tarihi, il, ekleyen_kullanici) 
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, data)
+                            ))
                             basarili += 1
-                        except Exception:
+                        except:
                             hata += 1
                     
                     conn.commit()
                     conn.close()
-                    st.success(f"✅ {basarili} kayıt eklendi. ❌ {hata} hata oluştu.")
+                    st.success(f"✅ {basarili} satır yüklendi. ❌ {hata} hata.")
                     time.sleep(1.5)
                     st.rerun()
             except Exception as e:
-                st.error(f"Dosya işlenirken hata: {e}")
+                st.error(f"Dosya okuma hatası: {e}")
     with tabs[3]:
         st.subheader("👑 Yönetici Paneli")
         co, cs = st.columns(2)
