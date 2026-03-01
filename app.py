@@ -8,6 +8,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import time
+import os # YENİ: Dosya (logo) kontrolü için eklendi
 
 # --- KULLANIM KILAVUZU METNİ ---
 KILAVUZ_METNI = """# 🇹🇷 TSE DENETİM PORTALI - KULLANIM KILAVUZU VE SİSTEM ÖZETİ
@@ -179,6 +180,13 @@ def durum_guncelle_by_id(kayit_id, sasi_no, yeni_durum, notlar, starih="MEVCUT",
 if not st.session_state.giris_yapildi:
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
+        # YENİ: LOGO EKLENTİSİ (GİRİŞ EKRANI)
+        if os.path.exists("tse_logo.png"):
+            # Logoyu tam ortalamak için küçük kolonlar kullanıyoruz
+            logo_c1, logo_c2, logo_c3 = st.columns([1, 2, 1])
+            with logo_c2:
+                st.image("tse_logo.png", use_container_width=True)
+                
         st.markdown("<h1 style='text-align: center; color: #E03131;'>🇹🇷 TSE DENETİM PORTALI</h1>", unsafe_allow_html=True)
         tg, tk = st.tabs(["🔐 Giriş Yap", "📝 Kayıt Ol"])
         with tg:
@@ -207,6 +215,10 @@ toplam_bekleyen = b_onay + b_silme
 df = verileri_getir()
 
 with st.sidebar:
+    # YENİ: LOGO EKLENTİSİ (YAN MENÜ)
+    if os.path.exists("tse_logo.png"):
+        st.image("tse_logo.png", use_container_width=True)
+        
     st.markdown("<h2 style='color: #E03131;'>TSE PANEL</h2>", unsafe_allow_html=True)
     st.write(f"👤 **{st.session_state.kullanici_adi}**")
     st.write(f"📍 **{st.session_state.sorumlu_il}**")
@@ -262,7 +274,6 @@ with tabs[1]:
     
     p_id = st.session_state.get('onay_bekleyen_sasi_id')
     
-    # --- YENİ: ŞASİ GİRİŞİNDE ÇİFT KAYIT KONTROLÜ VE BUTONLARI ---
     if p_id:
         st.warning("⚠️ DİKKAT: Bu Firma, Marka ve Araç Tipi kombinasyonuna sahip başka bir kayıt zaten sistemde mevcut! Yine de bu şasiyi kaydetmek istiyor musunuz?")
         c_evet, c_hayir = st.columns(2)
@@ -294,7 +305,6 @@ with tabs[1]:
                         st.error("Lütfen bir Şasi (VIN) Numarası giriniz!")
                     else:
                         try:
-                            # Aynı Firma, Marka, Araç Tipi'ne sahip başka bir kayıt (kendisi hariç) var mı?
                             conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
                             once = conn.cursor().execute('SELECT id FROM denetimler WHERE firma_adi=? AND marka=? AND arac_tipi=? AND id != ?', (row_m['firma_adi'], row_m['marka'], row_m['arac_tipi'], sid)).fetchone()
                             conn.close()
@@ -322,18 +332,15 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("📥 Veri Girişi")
     
-    # --- YENİ: EXCEL YÜKLEMEDE ÇİFT KAYIT KONTROLÜ VE BUTONLARI ---
     if st.session_state.get('onay_bekleyen_excel_df') is not None:
         st.warning("⚠️ DİKKAT: Yüklemeye çalıştığınız dosyadaki bazı kayıtların 'Firma, Marka ve Araç Tipi' bilgileri sistemde zaten mevcut! Yine de tabloya eklemek istiyor musunuz?")
         
         co1, co2 = st.columns(2)
         with co1:
             if st.button("✅ Devam (Tabloya Ekle)", use_container_width=True):
-                # Kaydet ve mail at fonksiyonunu çağırıyoruz
                 df_gecici = st.session_state.onay_bekleyen_excel_df
                 atlanmis = st.session_state.atlanan_kayit_sayisi
                 
-                # İşlemi bitirip durumu temizliyoruz
                 st.session_state.onay_bekleyen_excel_df = None
                 st.session_state.atlanan_kayit_sayisi = 0
                 
@@ -341,7 +348,6 @@ with tabs[2]:
                 
         with co2:
             if st.button("❌ Vazgeç (İptal Et)", use_container_width=True):
-                # Sadece ekranı temizle, hiçbir şey yapma
                 st.session_state.onay_bekleyen_excel_df = None
                 st.session_state.atlanan_kayit_sayisi = 0
                 st.rerun()
@@ -415,7 +421,6 @@ with tabs[2]:
                     mevcut_kayitlar = pd.read_sql_query("SELECT basvuru_no, firma_adi, marka, arac_tipi FROM denetimler", conn)
                     conn.close()
                     
-                    # 1. Başvuru Numarasına Göre Mükerrer (Birebir Aynı Kayıt) Kontrolü
                     mevcut_basvuru_listesi = mevcut_kayitlar['basvuru_no'].astype(str).tolist()
                     df_ekle['basvuru_no_str'] = df_ekle['basvuru_no'].astype(str)
                     
@@ -426,24 +431,18 @@ with tabs[2]:
                     if len(df_yeni) == 0:
                         st.warning("⚠️ Yüklediğiniz dosyadaki tüm kayıtlar zaten sistemde mevcut! Mükerrer kayıt engellendi.")
                     else:
-                        # 2. Firma-Marka-Tip Mükerrer (Benzer Kayıt) Kontrolü
                         cakisma_var = False
                         if not mevcut_kayitlar.empty:
-                            # Veritabanındaki Firma+Marka+Tip birleştirilip metne çevriliyor
                             mevcut_str = (mevcut_kayitlar['firma_adi'].astype(str) + mevcut_kayitlar['marka'].astype(str) + mevcut_kayitlar['arac_tipi'].astype(str)).str.lower().str.replace(" ", "")
-                            # Yeni verilerdeki Firma+Marka+Tip birleştirilip metne çevriliyor
                             yeni_str = (df_yeni['firma_adi'].astype(str) + df_yeni['marka'].astype(str) + df_yeni['arac_tipi'].astype(str)).str.lower().str.replace(" ", "")
                             
-                            # Eşleşme var mı diye kontrol ediyoruz
                             cakisma_var = yeni_str.isin(mevcut_str).any()
                         
                         if cakisma_var:
-                            # Çakışma varsa işlemi beklemeye al ve kullanıcıya sor
                             st.session_state.onay_bekleyen_excel_df = df_yeni
                             st.session_state.atlanan_kayit_sayisi = atlanan_sayi
                             st.rerun()
                         else:
-                            # Çakışma yoksa doğrudan kaydet ve mail at
                             excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi)
                             
                 except Exception as e:
