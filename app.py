@@ -9,7 +9,47 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import time
 
-# --- SAYFA YAPILANDIRMASI (MAKSİMUM GENİŞLİK İÇİN EKLENDİ) ---
+# --- KULLANIM KILAVUZU METNİ ---
+KILAVUZ_METNI = """# 🇹🇷 TSE DENETİM PORTALI - KULLANIM KILAVUZU VE SİSTEM ÖZETİ
+
+Bu proje, kurum içindeki başvuru, numune atama (şasi eşleştirme) ve denetim süreçlerini dijitalleştirmek, kullanıcıları illere göre yönetmek ve süreçleri otomatik e-posta bildirimleriyle hızlandırmak amacıyla geliştirilmiştir.
+
+## 🛠 1. Teknik Altyapı ve Güvenlik
+* Arayüz (UI): Kullanıcı dostu Streamlit altyapısı kullanılmıştır.
+* Veritabanı: Hızlı ve güvenilir SQLite kullanılmıştır. Çoklu kullanıcı erişimi için optimize edilmiştir.
+* Veri Güvenliği: Şifreler ve e-posta sunucu bilgileri güvenli "Secrets" kasasında saklanmaktadır.
+
+## 👥 2. Rol ve Oturum Yönetimi
+Sistemde iki farklı kullanıcı rolü bulunmaktadır: Kullanıcı ve Admin (Yönetici).
+* Yeni kayıt olan bir kullanıcı sisteme yöneticinin onayından sonra girebilir.
+* Yöneticiler tüm illerin verilerini görebilirken, standart kullanıcılar sadece kendi sorumlu oldukları illerin verilerini yönetebilirler.
+
+## 🖥 3. Sistem Sekmeleri ve Fonksiyonlar
+
+### 📊 Sekme 1: Ana Tablo (Sistem Kayıtları)
+Tüm verilerin izlendiği ana gösterge panelidir.
+* Özet Metrikler ve Renkli Durum Göstergeleri sunar.
+* Akıllı Arama ile tüm tabloda filtreleme yapılabilir.
+* Tablodaki veriler tek tıkla Excel (.xlsx) formatında bilgisayara indirilebilir.
+
+### 🛠️ Sekme 2: İşlem Paneli (Numune Kayıt Girişi)
+* Şasi Atama: "Şasi Bekliyor" durumundaki başvurulara VIN numarası girilerek "Teste Gönderildi" aşamasına geçirilir. Çift kayıt uyarısı ile koruma altındadır.
+* Güncelleme & İlave: Araçların durumları güncellenir veya silme talebi oluşturulabilir.
+
+### 📥 Sekme 3: Veri Girişi (Manuel & Excel)
+* Elden Kayıt: Tekil kayıtlar form aracılığıyla eklenebilir.
+* Excel ile Toplu Yükleme: Sütun eşleştirme, akıllı il tahmini ve mükerrer firma/marka/tip kontrolü yapılarak veriler güvenle sisteme aktarılır.
+
+### 👑 Sekme 4: Yönetici Paneli (Sadece Adminler)
+* Onay bekleyen üyeler ve silme talepleri yönetilir.
+* Kullanıcı Yönetimi: Excel yükleme yetkisi verilebilir, doğrudan kayıt veya kullanıcı hesabı kalıcı olarak silinebilir.
+
+## 📧 4. Arka Plan Otomasyonları (Mail Bildirimleri)
+* Yeni üye kaydı ve silme talebi bildirimleri yöneticiye anında iletilir.
+* Excel yüklendiğinde, sistem hangi ile kaç kayıt düştüğünü hesaplar ve SADECE o ilden sorumlu onaylı kullanıcılara otomatik bilgilendirme e-postası gönderir.
+"""
+
+# --- SAYFA YAPILANDIRMASI ---
 st.set_page_config(page_title="TSE Denetim Portalı", layout="wide")
 
 # --- TSE KURUMSAL VE MAİL AYARLARI ---
@@ -62,6 +102,39 @@ def kullanici_bildirim_mail_at(kime_mail, konu, icerik):
         server.send_message(msg); server.quit()
     except: pass
 
+# --- YARDIMCI İŞLEMLER ---
+def excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi):
+    """Excel verilerini veritabanına yazar ve mail bildirimlerini gönderir"""
+    conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
+    df_yeni.to_sql('denetimler', conn, if_exists='append', index=False)
+    
+    mail_gidenler = []
+    try:
+        il_ozeti = df_yeni['il'].value_counts().to_dict()
+        cursor = conn.cursor()
+        for il_adi, adet in il_ozeti.items():
+            ilgili_kullanicilar = cursor.execute("SELECT email, kullanici_adi FROM kullanicilar WHERE sorumlu_il=? AND onay_durumu=1", (il_adi,)).fetchall()
+            for k_mail, k_adi in ilgili_kullanicilar:
+                if k_mail and "@" in k_mail: 
+                    m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
+                    m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme <b>{adet} adet</b> yeni kayıt yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
+                    threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
+                    mail_gidenler.append(f"{k_adi} ({il_adi})")
+    except Exception as mail_hata:
+        st.warning(f"Uyarı: Kayıtlar eklendi ancak mail gönderilirken bir hata oluştu: {mail_hata}")
+    conn.close()
+    
+    eklenen_sayi = len(df_yeni)
+    mesaj = f"Tebrikler! {eklenen_sayi} adet YENİ kayıt başarıyla aktarıldı."
+    if atlanan_sayi > 0:
+        mesaj += f" ({atlanan_sayi} adet mevcut başvuru numarası mükerrer olduğu için atlandı.)"
+    if len(mail_gidenler) > 0:
+        mesaj += f" Bildirim iletilenler: {', '.join(mail_gidenler)}"
+        
+    st.success(mesaj)
+    time.sleep(3)
+    st.rerun()
+
 # --- 2. DURUM SORGULARI ---
 def durum_sayilarini_al():
     conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
@@ -90,7 +163,10 @@ def satir_boya(row):
 
 # --- 3. OTURUM YÖNETİMİ ---
 if 'giris_yapildi' not in st.session_state:
-    st.session_state.update({'giris_yapildi': False, 'kullanici_adi': "", 'rol': "", 'sorumlu_il': "", 'excel_yetkisi': 0})
+    st.session_state.update({
+        'giris_yapildi': False, 'kullanici_adi': "", 'rol': "", 'sorumlu_il': "", 'excel_yetkisi': 0,
+        'onay_bekleyen_excel_df': None, 'atlanan_kayit_sayisi': 0
+    })
 
 def durum_guncelle_by_id(kayit_id, sasi_no, yeni_durum, notlar, starih="MEVCUT", talep_et_silme=False, silme_nedeni=""):
     conn = sqlite3.connect('tse_v4.db', check_same_thread=False); g_ani = datetime.now().strftime("%Y-%m-%d %H:%M:%S"); sil_v = 1 if talep_et_silme else 0
@@ -136,7 +212,19 @@ with st.sidebar:
     st.write(f"📍 **{st.session_state.sorumlu_il}**")
     if st.session_state.rol == "admin" and toplam_bekleyen > 0:
         st.error(f"🚨 {toplam_bekleyen} Bekleyen İşlem!")
+    
     st.divider()
+    
+    st.download_button(
+        label="📄 Kullanım Kılavuzunu İndir",
+        data=KILAVUZ_METNI,
+        file_name="TSE_Denetim_Portali_Kullanim_Kilavuzu.md",
+        mime="text/markdown",
+        use_container_width=True
+    )
+    
+    st.divider()
+    
     if st.button("🚪 Oturumu Kapat", use_container_width=True):
         st.session_state.clear(); st.rerun()
 
@@ -173,15 +261,25 @@ with tabs[1]:
     i_df = df if st.session_state.rol == "admin" else df[(df['il'] == st.session_state.sorumlu_il) | (df['ekleyen_kullanici'] == st.session_state.kullanici_adi)]
     
     p_id = st.session_state.get('onay_bekleyen_sasi_id')
+    
+    # --- YENİ: ŞASİ GİRİŞİNDE ÇİFT KAYIT KONTROLÜ VE BUTONLARI ---
     if p_id:
-        st.warning("⚠️ Marka-Tip çakışması! Yine de şasiyi kaydetmek istiyor musunuz?")
-        if st.button("✅ Evet, Kaydet"):
-            try:
-                durum_guncelle_by_id(p_id, st.session_state.onay_bekleyen_sasi_no, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d"))
-                st.session_state.update({'onay_bekleyen_sasi_id': None, 'onay_bekleyen_sasi_no': None}); st.rerun()
-            except sqlite3.IntegrityError:
-                st.error("❌ Hata: Bu Şasi Numarası sistemde zaten mevcut!")
+        st.warning("⚠️ DİKKAT: Bu Firma, Marka ve Araç Tipi kombinasyonuna sahip başka bir kayıt zaten sistemde mevcut! Yine de bu şasiyi kaydetmek istiyor musunuz?")
+        c_evet, c_hayir = st.columns(2)
+        
+        with c_evet:
+            if st.button("✅ Devam (Kaydet)", use_container_width=True):
+                try:
+                    durum_guncelle_by_id(p_id, st.session_state.onay_bekleyen_sasi_no, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d"))
+                    st.session_state.update({'onay_bekleyen_sasi_id': None, 'onay_bekleyen_sasi_no': None}); st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("❌ Hata: Bu Şasi Numarası sistemde zaten mevcut!")
+                    st.session_state.update({'onay_bekleyen_sasi_id': None, 'onay_bekleyen_sasi_no': None})
+        
+        with c_hayir:
+            if st.button("❌ Vazgeç (İptal)", use_container_width=True):
                 st.session_state.update({'onay_bekleyen_sasi_id': None, 'onay_bekleyen_sasi_no': None})
+                st.rerun()
     else:
         c_left, c_right = st.columns(2)
         with c_left:
@@ -196,7 +294,11 @@ with tabs[1]:
                         st.error("Lütfen bir Şasi (VIN) Numarası giriniz!")
                     else:
                         try:
-                            conn = sqlite3.connect('tse_v4.db', check_same_thread=False); once = conn.cursor().execute('SELECT id FROM denetimler WHERE firma_adi=? AND marka=? AND arac_tipi=? AND secim_tarihi IS NOT NULL AND id != ?', (row_m['firma_adi'], row_m['marka'], row_m['arac_tipi'], sid)).fetchone(); conn.close()
+                            # Aynı Firma, Marka, Araç Tipi'ne sahip başka bir kayıt (kendisi hariç) var mı?
+                            conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
+                            once = conn.cursor().execute('SELECT id FROM denetimler WHERE firma_adi=? AND marka=? AND arac_tipi=? AND id != ?', (row_m['firma_adi'], row_m['marka'], row_m['arac_tipi'], sid)).fetchone()
+                            conn.close()
+                            
                             if once: 
                                 st.session_state.update({'onay_bekleyen_sasi_id': sid, 'onay_bekleyen_sasi_no': vin}); st.rerun()
                             else: 
@@ -219,130 +321,138 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("📥 Veri Girişi")
-    c_form, c_excel = st.columns(2)
-    with c_form:
-        with st.form("manuel_form"):
-            st.write("Elden Kayıt")
-            bn, fa, ma, ti, sn = st.text_input("B.No"), st.text_input("Firma"), st.text_input("Marka"), st.text_input("Tip"), st.text_input("Şasi")
-            if st.form_submit_button("Ekle"):
-                try:
-                    conn = sqlite3.connect('tse_v4.db', check_same_thread=False); conn.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, secim_tarihi, il) VALUES (?,?,?,?,?, 'Teste Gönderildi', ?, ?, ?)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il)); conn.commit(); conn.close(); st.rerun()
-                except sqlite3.IntegrityError:
-                    st.error("Bu şasi numarası sistemde mevcut!")
     
-    with c_excel:
-        up = st.file_uploader("Excel Yükle", type=['xlsx', 'csv'])
-        if up and st.button("Sisteme Aktar"):
-            try:
-                if up.name.endswith('.csv'):
-                    df_ekle = pd.read_csv(up)
-                else:
-                    df_ekle = pd.read_excel(up)
+    # --- YENİ: EXCEL YÜKLEMEDE ÇİFT KAYIT KONTROLÜ VE BUTONLARI ---
+    if st.session_state.get('onay_bekleyen_excel_df') is not None:
+        st.warning("⚠️ DİKKAT: Yüklemeye çalıştığınız dosyadaki bazı kayıtların 'Firma, Marka ve Araç Tipi' bilgileri sistemde zaten mevcut! Yine de tabloya eklemek istiyor musunuz?")
+        
+        co1, co2 = st.columns(2)
+        with co1:
+            if st.button("✅ Devam (Tabloya Ekle)", use_container_width=True):
+                # Kaydet ve mail at fonksiyonunu çağırıyoruz
+                df_gecici = st.session_state.onay_bekleyen_excel_df
+                atlanmis = st.session_state.atlanan_kayit_sayisi
                 
-                sutun_haritasi = {
-                    "BasvuruNo": "basvuru_no",
-                    "Firma": "firma_adi",
-                    "Marka": "marka",
-                    "Araç Kategori": "arac_kategori",
-                    "Tip": "arac_tipi",
-                    "Varyant": "varyant",
-                    "Versiyon": "versiyon",
-                    "TicariAd": "ticari_ad",
-                    "GtipNo": "gtip_no",
-                    "Birim": "birim",
-                    "Üretildiği Ülke": "uretim_ulkesi",
-                    "Araç Sayısı": "arac_sayisi"
-                }
+                # İşlemi bitirip durumu temizliyoruz
+                st.session_state.onay_bekleyen_excel_df = None
+                st.session_state.atlanan_kayit_sayisi = 0
                 
-                df_ekle.columns = df_ekle.columns.str.strip()
-                df_ekle.rename(columns=sutun_haritasi, inplace=True)
+                excel_kaydet_ve_mail_at(df_gecici, atlanmis)
                 
-                df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
-                if 'durum' not in df_ekle.columns:
-                    df_ekle['durum'] = 'Şasi Bekliyor'
-                
-                def il_tahmin_et(birim_metni):
-                    if pd.isna(birim_metni): return st.session_state.sorumlu_il
-                    metin = str(birim_metni).upper()
-                    if "ANKARA" in metin: return "Ankara"
-                    elif "İSTANBUL" in metin or "ISTANBUL" in metin: return "İstanbul"
-                    elif "İZMİR" in metin or "IZMIR" in metin: return "İzmir"
-                    elif "BURSA" in metin: return "Bursa"
-                    elif "KOCAELİ" in metin or "KOCAELI" in metin: return "Kocaeli"
-                    return st.session_state.sorumlu_il 
+        with co2:
+            if st.button("❌ Vazgeç (İptal Et)", use_container_width=True):
+                # Sadece ekranı temizle, hiçbir şey yapma
+                st.session_state.onay_bekleyen_excel_df = None
+                st.session_state.atlanan_kayit_sayisi = 0
+                st.rerun()
 
-                if 'birim' in df_ekle.columns:
-                    df_ekle['il'] = df_ekle['birim'].apply(il_tahmin_et)
-                elif 'il' not in df_ekle.columns:
-                    df_ekle['il'] = st.session_state.sorumlu_il
-                
-                gecerli_sutunlar = ['basvuru_no', 'firma_adi', 'marka', 'arac_kategori', 'arac_tipi', 
-                                    'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 'birim', 'uretim_ulkesi', 
-                                    'arac_sayisi', 'sasi_no', 'basvuru_tarihi', 'secim_tarihi', 'il', 'durum', 
-                                    'notlar', 'guncelleme_tarihi', 'ekleyen_kullanici', 'silme_talebi', 'silme_nedeni']
-                
-                df_ekle = df_ekle[[col for col in df_ekle.columns if col in gecerli_sutunlar]]
-                
-                conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-                mevcut_kayitlar = pd.read_sql_query("SELECT basvuru_no FROM denetimler", conn)
-                mevcut_basvuru_listesi = mevcut_kayitlar['basvuru_no'].astype(str).tolist()
-                
-                df_ekle['basvuru_no_str'] = df_ekle['basvuru_no'].astype(str)
-                df_yeni = df_ekle[~df_ekle['basvuru_no_str'].isin(mevcut_basvuru_listesi)].copy()
-                df_yeni.drop(columns=['basvuru_no_str'], inplace=True)
-                
-                if len(df_yeni) == 0:
-                    st.warning("⚠️ Yüklediğiniz dosyadaki tüm kayıtlar zaten sistemde mevcut! Mükerrer kayıt engellendi.")
-                    conn.close()
-                else:
-                    df_yeni.to_sql('denetimler', conn, if_exists='append', index=False)
-                    
-                    # --- YENİ EKLENEN: İLLERE GÖRE KULLANICI BULMA VE ÖZEL MAİL ATMA ---
-                    mail_gidenler = []
+    else:
+        c_form, c_excel = st.columns(2)
+        with c_form:
+            with st.form("manuel_form"):
+                st.write("Elden Kayıt")
+                bn, fa, ma, ti, sn = st.text_input("B.No"), st.text_input("Firma"), st.text_input("Marka"), st.text_input("Tip"), st.text_input("Şasi")
+                if st.form_submit_button("Ekle"):
                     try:
-                        # Yeni yüklenen verilerdeki illerin ve o ile ait kaç kayıt olduğunun özetini çıkarıyoruz
-                        il_ozeti = df_yeni['il'].value_counts().to_dict()
-                        cursor = conn.cursor()
-                        
-                        # Her bir il için döngü oluşturuyoruz
-                        for il_adi, adet in il_ozeti.items():
-                            # Sadece o ilden sorumlu onaylı kullanıcıları buluyoruz
-                            ilgili_kullanicilar = cursor.execute("SELECT email, kullanici_adi FROM kullanicilar WHERE sorumlu_il=? AND onay_durumu=1", (il_adi,)).fetchall()
-                            
-                            for k_mail, k_adi in ilgili_kullanicilar:
-                                if k_mail and "@" in k_mail: 
-                                    m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
-                                    # Maile o il için özel kaç adet kayıt yüklendiğini de yazıyoruz
-                                    m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme <b>{adet} adet</b> yeni kayıt yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
-                                    threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
-                                    # Ekranda göstermek üzere kişinin adını ve ilini listeye kaydediyoruz
-                                    mail_gidenler.append(f"{k_adi} ({il_adi})")
-                                    
-                    except Exception as mail_hata:
-                        st.warning(f"Uyarı: Kayıtlar eklendi ancak mail gönderilirken bir hata oluştu: {mail_hata}")
+                        conn = sqlite3.connect('tse_v4.db', check_same_thread=False); conn.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, secim_tarihi, il) VALUES (?,?,?,?,?, 'Teste Gönderildi', ?, ?, ?)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il)); conn.commit(); conn.close(); st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Bu şasi numarası sistemde mevcut!")
+        
+        with c_excel:
+            up = st.file_uploader("Excel Yükle", type=['xlsx', 'csv'])
+            if up and st.button("Sisteme Aktar"):
+                try:
+                    if up.name.endswith('.csv'):
+                        df_ekle = pd.read_csv(up)
+                    else:
+                        df_ekle = pd.read_excel(up)
                     
+                    sutun_haritasi = {
+                        "BasvuruNo": "basvuru_no",
+                        "Firma": "firma_adi",
+                        "Marka": "marka",
+                        "Araç Kategori": "arac_kategori",
+                        "Tip": "arac_tipi",
+                        "Varyant": "varyant",
+                        "Versiyon": "versiyon",
+                        "TicariAd": "ticari_ad",
+                        "GtipNo": "gtip_no",
+                        "Birim": "birim",
+                        "Üretildiği Ülke": "uretim_ulkesi",
+                        "Araç Sayısı": "arac_sayisi"
+                    }
+                    
+                    df_ekle.columns = df_ekle.columns.str.strip()
+                    df_ekle.rename(columns=sutun_haritasi, inplace=True)
+                    
+                    df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
+                    if 'durum' not in df_ekle.columns:
+                        df_ekle['durum'] = 'Şasi Bekliyor'
+                    
+                    def il_tahmin_et(birim_metni):
+                        if pd.isna(birim_metni): return st.session_state.sorumlu_il
+                        metin = str(birim_metni).upper()
+                        if "ANKARA" in metin: return "Ankara"
+                        elif "İSTANBUL" in metin or "ISTANBUL" in metin: return "İstanbul"
+                        elif "İZMİR" in metin or "IZMIR" in metin: return "İzmir"
+                        elif "BURSA" in metin: return "Bursa"
+                        elif "KOCAELİ" in metin or "KOCAELI" in metin: return "Kocaeli"
+                        return st.session_state.sorumlu_il 
+
+                    if 'birim' in df_ekle.columns:
+                        df_ekle['il'] = df_ekle['birim'].apply(il_tahmin_et)
+                    elif 'il' not in df_ekle.columns:
+                        df_ekle['il'] = st.session_state.sorumlu_il
+                    
+                    gecerli_sutunlar = ['basvuru_no', 'firma_adi', 'marka', 'arac_kategori', 'arac_tipi', 
+                                        'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 'birim', 'uretim_ulkesi', 
+                                        'arac_sayisi', 'sasi_no', 'basvuru_tarihi', 'secim_tarihi', 'il', 'durum', 
+                                        'notlar', 'guncelleme_tarihi', 'ekleyen_kullanici', 'silme_talebi', 'silme_nedeni']
+                    
+                    df_ekle = df_ekle[[col for col in df_ekle.columns if col in gecerli_sutunlar]]
+                    
+                    conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
+                    mevcut_kayitlar = pd.read_sql_query("SELECT basvuru_no, firma_adi, marka, arac_tipi FROM denetimler", conn)
                     conn.close()
                     
-                    eklenen_sayi = len(df_yeni)
-                    atlanan_sayi = len(df_ekle) - eklenen_sayi
+                    # 1. Başvuru Numarasına Göre Mükerrer (Birebir Aynı Kayıt) Kontrolü
+                    mevcut_basvuru_listesi = mevcut_kayitlar['basvuru_no'].astype(str).tolist()
+                    df_ekle['basvuru_no_str'] = df_ekle['basvuru_no'].astype(str)
                     
-                    mesaj = f"Tebrikler! {eklenen_sayi} adet YENİ kayıt başarıyla aktarıldı."
-                    if atlanan_sayi > 0:
-                        mesaj += f" ({atlanan_sayi} adet mevcut mükerrer kayıt atlandı.)"
-                    if len(mail_gidenler) > 0:
-                        mesaj += f" Bildirim iletilenler: {', '.join(mail_gidenler)}"
+                    df_yeni = df_ekle[~df_ekle['basvuru_no_str'].isin(mevcut_basvuru_listesi)].copy()
+                    df_yeni.drop(columns=['basvuru_no_str'], inplace=True)
+                    atlanan_sayi = len(df_ekle) - len(df_yeni)
+                    
+                    if len(df_yeni) == 0:
+                        st.warning("⚠️ Yüklediğiniz dosyadaki tüm kayıtlar zaten sistemde mevcut! Mükerrer kayıt engellendi.")
+                    else:
+                        # 2. Firma-Marka-Tip Mükerrer (Benzer Kayıt) Kontrolü
+                        cakisma_var = False
+                        if not mevcut_kayitlar.empty:
+                            # Veritabanındaki Firma+Marka+Tip birleştirilip metne çevriliyor
+                            mevcut_str = (mevcut_kayitlar['firma_adi'].astype(str) + mevcut_kayitlar['marka'].astype(str) + mevcut_kayitlar['arac_tipi'].astype(str)).str.lower().str.replace(" ", "")
+                            # Yeni verilerdeki Firma+Marka+Tip birleştirilip metne çevriliyor
+                            yeni_str = (df_yeni['firma_adi'].astype(str) + df_yeni['marka'].astype(str) + df_yeni['arac_tipi'].astype(str)).str.lower().str.replace(" ", "")
+                            
+                            # Eşleşme var mı diye kontrol ediyoruz
+                            cakisma_var = yeni_str.isin(mevcut_str).any()
                         
-                    st.success(mesaj)
-                    time.sleep(3)
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Aktarım sırasında kritik bir hata oluştu: {e}")
+                        if cakisma_var:
+                            # Çakışma varsa işlemi beklemeye al ve kullanıcıya sor
+                            st.session_state.onay_bekleyen_excel_df = df_yeni
+                            st.session_state.atlanan_kayit_sayisi = atlanan_sayi
+                            st.rerun()
+                        else:
+                            # Çakışma yoksa doğrudan kaydet ve mail at
+                            excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi)
+                            
+                except Exception as e:
+                    st.error(f"Aktarım sırasında kritik bir hata oluştu: {e}")
 
 if st.session_state.rol == "admin":
     with tabs[3]:
         st.subheader("👑 Yönetici Paneli")
         
-        # --- ONAY VE SİLME TALEPLERİ ---
         co, cs = st.columns(2)
         with co:
             st.markdown(f"**Onay Bekleyen Üyeler ({b_onay})**")
@@ -360,7 +470,6 @@ if st.session_state.rol == "admin":
 
         st.divider() 
 
-        # --- KULLANICI BİLGİLERİ VE YETKİLENDİRME ---
         st.subheader("👥 Kullanıcı Yönetimi")
         conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
         tum_kullanicilar_df = pd.read_sql_query("SELECT id, kullanici_adi, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar", conn)
