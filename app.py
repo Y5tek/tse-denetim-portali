@@ -187,7 +187,7 @@ if not st.session_state.giris_yapildi:
             with logo_c2:
                 st.image("tse_logo.png", use_container_width=True)
                 
-        st.markdown("<h1 style='text-align: center; color: #E03131;'>🇹🇷 TSE DENETİM PORTALI</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center; color: #E03131;'> TSE NUMUNE TAKİP PORTALI</h1>", unsafe_allow_html=True)
         tg, tk = st.tabs(["🔐 Giriş Yap", "📝 Kayıt Ol"])
         with tg:
             with st.form("login_form"):
