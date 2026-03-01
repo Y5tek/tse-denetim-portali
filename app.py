@@ -67,18 +67,18 @@ SMTP_PORT = 465
 
 # --- 1. VERİTABANI MOTORU ---
 def veritabanini_hazirla():
-    conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS denetimler (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, basvuru_no TEXT, firma_adi TEXT NOT NULL, marka TEXT,
-        arac_kategori TEXT, arac_tipi TEXT NOT NULL, varyant TEXT, versiyon TEXT, ticari_ad TEXT,
-        gtip_no TEXT, birim TEXT, uretim_ulkesi TEXT, arac_sayisi TEXT, sasi_no TEXT UNIQUE, 
-        basvuru_tarihi DATE, secim_tarihi DATE, il TEXT, durum TEXT DEFAULT 'Şasi Bekliyor',
-        notlar TEXT, guncelleme_tarihi TEXT, ekleyen_kullanici TEXT, silme_talebi INTEGER DEFAULT 0, silme_nedeni TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS kullanicilar (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, kullanici_adi TEXT UNIQUE NOT NULL, sifre TEXT NOT NULL,
-        rol TEXT NOT NULL, email TEXT, sorumlu_il TEXT, onay_durumu INTEGER DEFAULT 1, excel_yukleme_yetkisi INTEGER DEFAULT 0)''')
-    conn.commit(); conn.close()
+    with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS denetimler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, basvuru_no TEXT, firma_adi TEXT NOT NULL, marka TEXT,
+            arac_kategori TEXT, arac_tipi TEXT NOT NULL, varyant TEXT, versiyon TEXT, ticari_ad TEXT,
+            gtip_no TEXT, birim TEXT, uretim_ulkesi TEXT, arac_sayisi TEXT, sasi_no TEXT UNIQUE, 
+            basvuru_tarihi DATE, secim_tarihi DATE, il TEXT, durum TEXT DEFAULT 'Şasi Bekliyor',
+            notlar TEXT, guncelleme_tarihi TEXT, ekleyen_kullanici TEXT, silme_talebi INTEGER DEFAULT 0, silme_nedeni TEXT)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS kullanicilar (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, kullanici_adi TEXT UNIQUE NOT NULL, sifre TEXT NOT NULL,
+            rol TEXT NOT NULL, email TEXT, sorumlu_il TEXT, onay_durumu INTEGER DEFAULT 1, excel_yukleme_yetkisi INTEGER DEFAULT 0)''')
+        conn.commit()
 
 veritabanini_hazirla()
 
@@ -106,24 +106,23 @@ def kullanici_bildirim_mail_at(kime_mail, konu, icerik):
 # --- YARDIMCI İŞLEMLER ---
 def excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi):
     """Excel verilerini veritabanına yazar ve mail bildirimlerini gönderir"""
-    conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-    df_yeni.to_sql('denetimler', conn, if_exists='append', index=False)
-    
     mail_gidenler = []
-    try:
-        il_ozeti = df_yeni['il'].value_counts().to_dict()
-        cursor = conn.cursor()
-        for il_adi, adet in il_ozeti.items():
-            ilgili_kullanicilar = cursor.execute("SELECT email, kullanici_adi FROM kullanicilar WHERE sorumlu_il=? AND onay_durumu=1", (il_adi,)).fetchall()
-            for k_mail, k_adi in ilgili_kullanicilar:
-                if k_mail and "@" in k_mail: 
-                    m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
-                    m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme <b>{adet} adet</b> yeni kayıt yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
-                    threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
-                    mail_gidenler.append(f"{k_adi} ({il_adi})")
-    except Exception as mail_hata:
-        st.warning(f"Uyarı: Kayıtlar eklendi ancak mail gönderilirken bir hata oluştu: {mail_hata}")
-    conn.close()
+    with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+        df_yeni.to_sql('denetimler', conn, if_exists='append', index=False)
+        
+        try:
+            il_ozeti = df_yeni['il'].value_counts().to_dict()
+            cursor = conn.cursor()
+            for il_adi, adet in il_ozeti.items():
+                ilgili_kullanicilar = cursor.execute("SELECT email, kullanici_adi FROM kullanicilar WHERE sorumlu_il=? AND onay_durumu=1", (il_adi,)).fetchall()
+                for k_mail, k_adi in ilgili_kullanicilar:
+                    if k_mail and "@" in k_mail: 
+                        m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
+                        m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme <b>{adet} adet</b> yeni kayıt yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
+                        threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
+                        mail_gidenler.append(f"{k_adi} ({il_adi})")
+        except Exception as mail_hata:
+            st.warning(f"Uyarı: Kayıtlar eklendi ancak mail gönderilirken bir hata oluştu: {mail_hata}")
     
     eklenen_sayi = len(df_yeni)
     mesaj = f"Tebrikler! {eklenen_sayi} adet YENİ kayıt başarıyla aktarıldı."
@@ -138,16 +137,15 @@ def excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi):
 
 # --- 2. DURUM SORGULARI ---
 def durum_sayilarini_al():
-    conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-    onay_sayisi = conn.execute("SELECT COUNT(*) FROM kullanicilar WHERE onay_durumu = 0").fetchone()[0]
-    silme_sayisi = conn.execute("SELECT COUNT(*) FROM denetimler WHERE silme_talebi = 1").fetchone()[0]
-    conn.close()
+    with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+        onay_sayisi = conn.execute("SELECT COUNT(*) FROM kullanicilar WHERE onay_durumu = 0").fetchone()[0]
+        silme_sayisi = conn.execute("SELECT COUNT(*) FROM denetimler WHERE silme_talebi = 1").fetchone()[0]
     return onay_sayisi, silme_sayisi
 
 def verileri_getir():
-    conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-    df = pd.read_sql_query("SELECT * FROM denetimler ORDER BY id DESC", conn)
-    conn.close()
+    with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+        df = pd.read_sql_query("SELECT * FROM denetimler ORDER BY id DESC", conn)
+    
     df['secim_tarihi_dt'] = pd.to_datetime(df['secim_tarihi'])
     bugun = pd.to_datetime(datetime.now().strftime("%Y-%m-%d"))
     df['Geçen Gün'] = (bugun - df['secim_tarihi_dt']).dt.days.apply(lambda x: str(int(x)) if pd.notnull(x) else '-')
@@ -170,10 +168,15 @@ if 'giris_yapildi' not in st.session_state:
     })
 
 def durum_guncelle_by_id(kayit_id, sasi_no, yeni_durum, notlar, starih="MEVCUT", talep_et_silme=False, silme_nedeni=""):
-    conn = sqlite3.connect('tse_v4.db', check_same_thread=False); g_ani = datetime.now().strftime("%Y-%m-%d %H:%M:%S"); sil_v = 1 if talep_et_silme else 0
-    if starih == "MEVCUT": conn.cursor().execute('UPDATE denetimler SET sasi_no=?, durum=?, notlar=?, guncelleme_tarihi=?, silme_talebi=?, silme_nedeni=? WHERE id=?', (sasi_no, yeni_durum, notlar, g_ani, sil_v, silme_nedeni, kayit_id))
-    else: conn.cursor().execute('UPDATE denetimler SET sasi_no=?, durum=?, secim_tarihi=?, notlar=?, guncelleme_tarihi=?, silme_talebi=?, silme_nedeni=? WHERE id=?', (sasi_no, yeni_durum, starih, notlar, g_ani, sil_v, silme_nedeni, kayit_id))
-    conn.commit(); conn.close()
+    g_ani = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sil_v = 1 if talep_et_silme else 0
+    with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+        if starih == "MEVCUT": 
+            conn.cursor().execute('UPDATE denetimler SET sasi_no=?, durum=?, notlar=?, guncelleme_tarihi=?, silme_talebi=?, silme_nedeni=? WHERE id=?', (sasi_no, yeni_durum, notlar, g_ani, sil_v, silme_nedeni, kayit_id))
+        else: 
+            conn.cursor().execute('UPDATE denetimler SET sasi_no=?, durum=?, secim_tarihi=?, notlar=?, guncelleme_tarihi=?, silme_talebi=?, silme_nedeni=? WHERE id=?', (sasi_no, yeni_durum, starih, notlar, g_ani, sil_v, silme_nedeni, kayit_id))
+        conn.commit()
+        
     if talep_et_silme: threading.Thread(target=admin_bildirim_mail_at, args=("⚠️ YENİ SİLME TALEBİ", f"{sasi_no} için silme talebi var.")).start()
 
 # --- 4. GİRİŞ EKRANI ---
@@ -193,7 +196,9 @@ if not st.session_state.giris_yapildi:
             with st.form("login_form"):
                 ka, si = st.text_input("Kullanıcı Adı"), st.text_input("Şifre", type="password")
                 if st.form_submit_button("Giriş Yap", use_container_width=True):
-                    conn = sqlite3.connect('tse_v4.db', check_same_thread=False); u = conn.cursor().execute("SELECT rol, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar WHERE kullanici_adi=? AND sifre=?", (ka, si)).fetchone(); conn.close()
+                    with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+                        u = conn.cursor().execute("SELECT rol, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar WHERE kullanici_adi=? AND sifre=?", (ka, si)).fetchone()
+                    
                     if u:
                         if u[2]==0: st.warning("Oturum onayı bekleniyor.")
                         else: st.session_state.update({'giris_yapildi':True, 'kullanici_adi':ka, 'rol':u[0], 'sorumlu_il':u[1], 'excel_yetkisi':u[3]}); st.rerun()
@@ -203,7 +208,9 @@ if not st.session_state.giris_yapildi:
                 yk, ys, ye, yil = st.text_input("Kullanıcı Adı"), st.text_input("Şifre"), st.text_input("E-Posta"), st.selectbox("İl", ["Ankara", "İstanbul", "İzmir", "Bursa", "Kocaeli", "Diğer"])
                 if st.form_submit_button("Kayıt Talebi Gönder"):
                     try:
-                        conn = sqlite3.connect('tse_v4.db', check_same_thread=False); conn.cursor().execute("INSERT INTO kullanicilar (kullanici_adi, sifre, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi) VALUES (?, ?, 'kullanici', ?, ?, 0, 0)", (yk, ys, ye, yil)); conn.commit(); conn.close()
+                        with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+                            conn.cursor().execute("INSERT INTO kullanicilar (kullanici_adi, sifre, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi) VALUES (?, ?, 'kullanici', ?, ?, 0, 0)", (yk, ys, ye, yil))
+                            conn.commit()
                         threading.Thread(target=admin_bildirim_mail_at, args=("📝 YENİ KAYIT", f"Yeni üye talebi: {yk}")).start()
                         st.success("Tebrikler! Talebiniz iletildi."); time.sleep(1); st.rerun()
                     except: st.error("Kullanıcı adı mevcut.")
@@ -305,9 +312,8 @@ with tabs[1]:
                         st.error("Lütfen bir Şasi (VIN) Numarası giriniz!")
                     else:
                         try:
-                            conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-                            once = conn.cursor().execute('SELECT id FROM denetimler WHERE firma_adi=? AND marka=? AND arac_tipi=? AND id != ?', (row_m['firma_adi'], row_m['marka'], row_m['arac_tipi'], sid)).fetchone()
-                            conn.close()
+                            with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+                                once = conn.cursor().execute('SELECT id FROM denetimler WHERE firma_adi=? AND marka=? AND arac_tipi=? AND id != ?', (row_m['firma_adi'], row_m['marka'], row_m['arac_tipi'], sid)).fetchone()
                             
                             if once: 
                                 st.session_state.update({'onay_bekleyen_sasi_id': sid, 'onay_bekleyen_sasi_no': vin}); st.rerun()
@@ -360,7 +366,10 @@ with tabs[2]:
                 bn, fa, ma, ti, sn = st.text_input("B.No"), st.text_input("Firma"), st.text_input("Marka"), st.text_input("Tip"), st.text_input("Şasi")
                 if st.form_submit_button("Ekle"):
                     try:
-                        conn = sqlite3.connect('tse_v4.db', check_same_thread=False); conn.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, secim_tarihi, il) VALUES (?,?,?,?,?, 'Teste Gönderildi', ?, ?, ?)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il)); conn.commit(); conn.close(); st.rerun()
+                        with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+                            conn.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, secim_tarihi, il) VALUES (?,?,?,?,?, 'Teste Gönderildi', ?, ?, ?)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il))
+                            conn.commit()
+                        st.rerun()
                     except sqlite3.IntegrityError:
                         st.error("Bu şasi numarası sistemde mevcut!")
         
@@ -417,9 +426,8 @@ with tabs[2]:
                     
                     df_ekle = df_ekle[[col for col in df_ekle.columns if col in gecerli_sutunlar]]
                     
-                    conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-                    mevcut_kayitlar = pd.read_sql_query("SELECT basvuru_no, firma_adi, marka, arac_tipi FROM denetimler", conn)
-                    conn.close()
+                    with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+                        mevcut_kayitlar = pd.read_sql_query("SELECT basvuru_no, firma_adi, marka, arac_tipi FROM denetimler", conn)
                     
                     mevcut_basvuru_listesi = mevcut_kayitlar['basvuru_no'].astype(str).tolist()
                     df_ekle['basvuru_no_str'] = df_ekle['basvuru_no'].astype(str)
@@ -455,23 +463,32 @@ if st.session_state.rol == "admin":
         co, cs = st.columns(2)
         with co:
             st.markdown(f"**Onay Bekleyen Üyeler ({b_onay})**")
-            conn = sqlite3.connect('tse_v4.db', check_same_thread=False); k_df = pd.read_sql_query("SELECT * FROM kullanicilar WHERE onay_durumu=0", conn); conn.close()
+            with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+                k_df = pd.read_sql_query("SELECT * FROM kullanicilar WHERE onay_durumu=0", conn)
+            
             for _, r in k_df.iterrows():
                 st.write(f"👤 {r['kullanici_adi']}")
                 if st.button("Onayla", key=f"o_{r['id']}"):
-                    c = sqlite3.connect('tse_v4.db', check_same_thread=False); c.execute("UPDATE kullanicilar SET onay_durumu=1 WHERE id=?", (r['id'],)); c.commit(); c.close(); st.rerun()
+                    with sqlite3.connect('tse_v4.db', check_same_thread=False) as c:
+                        c.execute("UPDATE kullanicilar SET onay_durumu=1 WHERE id=?", (r['id'],))
+                        c.commit()
+                    st.rerun()
         with cs:
             st.markdown(f"**Silme Talepleri ({b_silme})**")
             for _, r in df[df['silme_talebi']==1].iterrows():
                 st.write(f"🗑️ {r['sasi_no']}")
                 if st.button("Kalıcı Sil", key=f"sil_{r['id']}"):
-                    c = sqlite3.connect('tse_v4.db', check_same_thread=False); c.execute("DELETE FROM denetimler WHERE id=?", (r['id'],)); c.commit(); c.close(); st.rerun()
+                    with sqlite3.connect('tse_v4.db', check_same_thread=False) as c:
+                        c.execute("DELETE FROM denetimler WHERE id=?", (r['id'],))
+                        c.commit()
+                    st.rerun()
 
         st.divider() 
 
         st.subheader("👥 Kullanıcı Yönetimi")
-        conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-        tum_kullanicilar_df = pd.read_sql_query("SELECT id, kullanici_adi, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar", conn)
+        
+        with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
+            tum_kullanicilar_df = pd.read_sql_query("SELECT id, kullanici_adi, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar", conn)
         
         st.dataframe(tum_kullanicilar_df, use_container_width=True)
 
@@ -484,9 +501,9 @@ if st.session_state.rol == "admin":
                 mevcut_yetki = tum_kullanicilar_df[tum_kullanicilar_df['kullanici_adi'] == secili_kullanici]['excel_yukleme_yetkisi'].iloc[0]
                 yeni_yetki = st.radio("Yetki Durumu:", [1, 0], index=0 if mevcut_yetki == 1 else 1, format_func=lambda x: "Yetkili (1)" if x == 1 else "Yetkisiz (0)")
                 if st.button("Yetkiyi Güncelle"):
-                    c = sqlite3.connect('tse_v4.db', check_same_thread=False)
-                    c.execute("UPDATE kullanicilar SET excel_yukleme_yetkisi=? WHERE kullanici_adi=?", (yeni_yetki, secili_kullanici))
-                    c.commit(); c.close()
+                    with sqlite3.connect('tse_v4.db', check_same_thread=False) as c:
+                        c.execute("UPDATE kullanicilar SET excel_yukleme_yetkisi=? WHERE kullanici_adi=?", (yeni_yetki, secili_kullanici))
+                        c.commit()
                     st.success(f"{secili_kullanici} yetkisi güncellendi.")
                     time.sleep(1); st.rerun()
 
@@ -496,9 +513,9 @@ if st.session_state.rol == "admin":
             silinecek_secim = st.selectbox("Silinecek Kaydı Seç (Şasi veya Başvuru No)", options=["Seçiniz..."] + (df['id'].astype(str) + " | Şasi: " + df['sasi_no'].fillna('-').astype(str) + " | Başvuru: " + df['basvuru_no'].fillna('-').astype(str)).tolist())
             if silinecek_secim != "Seçiniz..." and st.button("🚨 Kaydı Kalıcı Sil"):
                 sil_id = int(silinecek_secim.split(" |")[0])
-                c = sqlite3.connect('tse_v4.db', check_same_thread=False)
-                c.execute("DELETE FROM denetimler WHERE id=?", (sil_id,))
-                c.commit(); c.close()
+                with sqlite3.connect('tse_v4.db', check_same_thread=False) as c:
+                    c.execute("DELETE FROM denetimler WHERE id=?", (sil_id,))
+                    c.commit()
                 st.success("Kayıt kalıcı olarak silindi.")
                 time.sleep(1); st.rerun()
                 
@@ -511,10 +528,8 @@ if st.session_state.rol == "admin":
                 if silinecek_kullanici == st.session_state.kullanici_adi:
                     st.error("Kendi hesabınızı silemezsiniz!")
                 else:
-                    c = sqlite3.connect('tse_v4.db', check_same_thread=False)
-                    c.execute("DELETE FROM kullanicilar WHERE kullanici_adi=?", (silinecek_kullanici,))
-                    c.commit(); c.close()
+                    with sqlite3.connect('tse_v4.db', check_same_thread=False) as c:
+                        c.execute("DELETE FROM kullanicilar WHERE kullanici_adi=?", (silinecek_kullanici,))
+                        c.commit()
                     st.success(f"{silinecek_kullanici} kullanıcısı sistemden silindi.")
                     time.sleep(1); st.rerun()
-        
-        conn.close()
