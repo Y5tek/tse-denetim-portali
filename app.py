@@ -306,4 +306,100 @@ with tabs[2]:
                             for k_mail, k_adi in ilgili_kullanicilar:
                                 if k_mail and "@" in k_mail: 
                                     m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
-                                    m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz
+                                    m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme yeni veri yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
+                                    threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
+                                    mail_gidenler.append(k_adi)
+                    except Exception as mail_hata:
+                        st.warning(f"Uyarı: Kayıtlar eklendi ancak mail gönderilirken bir hata oluştu: {mail_hata}")
+                    
+                    conn.close()
+                    
+                    eklenen_sayi = len(df_yeni)
+                    atlanan_sayi = len(df_ekle) - eklenen_sayi
+                    
+                    mesaj = f"Tebrikler! {eklenen_sayi} adet YENİ kayıt başarıyla aktarıldı."
+                    if atlanan_sayi > 0:
+                        mesaj += f" ({atlanan_sayi} adet mevcut mükerrer kayıt atlandı.)"
+                    if len(mail_gidenler) > 0:
+                        mesaj += f" Bildirim iletilenler: {', '.join(mail_gidenler)}"
+                        
+                    st.success(mesaj)
+                    time.sleep(3)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Aktarım sırasında kritik bir hata oluştu: {e}")
+
+if st.session_state.rol == "admin":
+    with tabs[3]:
+        st.subheader("👑 Yönetici Paneli")
+        
+        # --- ONAY VE SİLME TALEPLERİ ---
+        co, cs = st.columns(2)
+        with co:
+            st.markdown(f"**Onay Bekleyen Üyeler ({b_onay})**")
+            conn = sqlite3.connect('tse_v4.db', check_same_thread=False); k_df = pd.read_sql_query("SELECT * FROM kullanicilar WHERE onay_durumu=0", conn); conn.close()
+            for _, r in k_df.iterrows():
+                st.write(f"👤 {r['kullanici_adi']}")
+                if st.button("Onayla", key=f"o_{r['id']}"):
+                    c = sqlite3.connect('tse_v4.db', check_same_thread=False); c.execute("UPDATE kullanicilar SET onay_durumu=1 WHERE id=?", (r['id'],)); c.commit(); c.close(); st.rerun()
+        with cs:
+            st.markdown(f"**Silme Talepleri ({b_silme})**")
+            for _, r in df[df['silme_talebi']==1].iterrows():
+                st.write(f"🗑️ {r['sasi_no']}")
+                if st.button("Kalıcı Sil", key=f"sil_{r['id']}"):
+                    c = sqlite3.connect('tse_v4.db', check_same_thread=False); c.execute("DELETE FROM denetimler WHERE id=?", (r['id'],)); c.commit(); c.close(); st.rerun()
+
+        st.divider() 
+
+        # --- KULLANICI BİLGİLERİ VE YETKİLENDİRME ---
+        st.subheader("👥 Kullanıcı Yönetimi")
+        conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
+        tum_kullanicilar_df = pd.read_sql_query("SELECT id, kullanici_adi, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar", conn)
+        
+        st.dataframe(tum_kullanicilar_df, use_container_width=True)
+
+        # ARTIK 3 SÜTUNUMUZ VAR: Yetki, Kayıt Sil, Kullanıcı Sil
+        c_yetki, c_kayit_sil, c_kullanici_sil = st.columns(3)
+        
+        with c_yetki:
+            st.markdown("**Excel Yükleme Yetkisi Düzenle**")
+            secili_kullanici = st.selectbox("Kullanıcı Seçin", tum_kullanicilar_df['kullanici_adi'].tolist(), key="yetki_kullanici")
+            if secili_kullanici:
+                mevcut_yetki = tum_kullanicilar_df[tum_kullanicilar_df['kullanici_adi'] == secili_kullanici]['excel_yukleme_yetkisi'].iloc[0]
+                yeni_yetki = st.radio("Yetki Durumu:", [1, 0], index=0 if mevcut_yetki == 1 else 1, format_func=lambda x: "Yetkili (1)" if x == 1 else "Yetkisiz (0)")
+                if st.button("Yetkiyi Güncelle"):
+                    c = sqlite3.connect('tse_v4.db', check_same_thread=False)
+                    c.execute("UPDATE kullanicilar SET excel_yukleme_yetkisi=? WHERE kullanici_adi=?", (yeni_yetki, secili_kullanici))
+                    c.commit(); c.close()
+                    st.success(f"{secili_kullanici} yetkisi güncellendi.")
+                    time.sleep(1); st.rerun()
+
+        with c_kayit_sil:
+            st.markdown("**Doğrudan Kayıt Silme**")
+            st.info("⚠️ Silinen kayıtlar geri getirilemez.")
+            silinecek_secim = st.selectbox("Silinecek Kaydı Seç (Şasi veya Başvuru No)", options=["Seçiniz..."] + (df['id'].astype(str) + " | Şasi: " + df['sasi_no'].fillna('-').astype(str) + " | Başvuru: " + df['basvuru_no'].fillna('-').astype(str)).tolist())
+            if silinecek_secim != "Seçiniz..." and st.button("🚨 Kaydı Kalıcı Sil"):
+                sil_id = int(silinecek_secim.split(" |")[0])
+                c = sqlite3.connect('tse_v4.db', check_same_thread=False)
+                c.execute("DELETE FROM denetimler WHERE id=?", (sil_id,))
+                c.commit(); c.close()
+                st.success("Kayıt kalıcı olarak silindi.")
+                time.sleep(1); st.rerun()
+                
+        # --- YENİ EKLENEN: KULLANICI HESABINI SİLME ---
+        with c_kullanici_sil:
+            st.markdown("**Kullanıcı Hesabını Sil**")
+            st.info("⚠️ Silinen kullanıcı geri getirilemez.")
+            silinecek_kullanici = st.selectbox("Silinecek Kullanıcıyı Seçin", ["Seçiniz..."] + tum_kullanicilar_df['kullanici_adi'].tolist(), key="sil_kullanici_sec")
+            
+            if silinecek_kullanici != "Seçiniz..." and st.button("🚨 Kullanıcıyı Sil"):
+                if silinecek_kullanici == st.session_state.kullanici_adi:
+                    st.error("Kendi hesabınızı silemezsiniz!")
+                else:
+                    c = sqlite3.connect('tse_v4.db', check_same_thread=False)
+                    c.execute("DELETE FROM kullanicilar WHERE kullanici_adi=?", (silinecek_kullanici,))
+                    c.commit(); c.close()
+                    st.success(f"{silinecek_kullanici} kullanıcısı sistemden silindi.")
+                    time.sleep(1); st.rerun()
+        
+        conn.close()
