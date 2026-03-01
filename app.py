@@ -8,7 +8,8 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import time
-import os # YENİ: Dosya (logo) kontrolü için eklendi
+import os
+import hashlib # YENİ: Şifreleme işlemleri için eklendi
 
 # --- KULLANIM KILAVUZU METNİ ---
 KILAVUZ_METNI = """# 🇹🇷 TSE NUMUNE TAKİP PORTALI - KULLANIM KILAVUZU VE SİSTEM ÖZETİ
@@ -18,7 +19,7 @@ Bu proje, kurum içindeki başvuru, numune atama (şasi eşleştirme) ve denetim
 ## 🛠 1. Teknik Altyapı ve Güvenlik
 * Arayüz (UI): Kullanıcı dostu Streamlit altyapısı kullanılmıştır.
 * Veritabanı: Hızlı ve güvenilir SQLite kullanılmıştır. Çoklu kullanıcı erişimi için optimize edilmiştir.
-* Veri Güvenliği: Şifreler ve e-posta sunucu bilgileri güvenli "Secrets" kasasında saklanmaktadır.
+* Veri Güvenliği: Şifreler ve e-posta sunucu bilgileri güvenli "Secrets" kasasında saklanmaktadır. Kullanıcı parolaları SHA-256 ile şifrelenerek korunur.
 
 ## 👥 2. Rol ve Oturum Yönetimi
 Sistemde iki farklı kullanıcı rolü bulunmaktadır: Kullanıcı ve Admin (Yönetici).
@@ -64,6 +65,11 @@ except Exception:
 
 SMTP_SUNUCU = "smtp.gmail.com"
 SMTP_PORT = 465 
+
+# --- YENİ: ŞİFRE HASHLEME FONKSİYONU ---
+def sifreyi_hashle(sifre_metni):
+    """Kullanıcının girdiği açık metin şifreyi SHA-256 algoritmasıyla şifreler."""
+    return hashlib.sha256(sifre_metni.encode('utf-8')).hexdigest()
 
 # --- 1. VERİTABANI MOTORU ---
 def veritabanini_hazirla():
@@ -179,37 +185,43 @@ def durum_guncelle_by_id(kayit_id, sasi_no, yeni_durum, notlar, starih="MEVCUT",
         
     if talep_et_silme: threading.Thread(target=admin_bildirim_mail_at, args=("⚠️ YENİ SİLME TALEBİ", f"{sasi_no} için silme talebi var.")).start()
 
-# --- 4. GİRİŞ EKRANI ---
+# --- 4. GİRİŞ EKRANI (REVİZE EDİLDİ) ---
 if not st.session_state.giris_yapildi:
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        # YENİ: LOGO EKLENTİSİ (GİRİŞ EKRANI)
         if os.path.exists("tse_logo.png"):
-            # Logoyu tam ortalamak için küçük kolonlar kullanıyoruz
             logo_c1, logo_c2, logo_c3 = st.columns([1, 2, 1])
             with logo_c2:
                 st.image("tse_logo.png", use_container_width=True)
                 
         st.markdown("<h1 style='text-align: center; color: #E03131;'> TSE NUMUNE TAKİP PORTALI</h1>", unsafe_allow_html=True)
         tg, tk = st.tabs(["🔐 Giriş Yap", "📝 Kayıt Ol"])
+        
         with tg:
             with st.form("login_form"):
                 ka, si = st.text_input("Kullanıcı Adı"), st.text_input("Şifre", type="password")
                 if st.form_submit_button("Giriş Yap", use_container_width=True):
+                    # GİRİŞ: Girilen şifreyi hashleyip veritabanındaki hash ile karşılaştırıyoruz
+                    hashli_giris_sifresi = sifreyi_hashle(si) 
+                    
                     with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
-                        u = conn.cursor().execute("SELECT rol, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar WHERE kullanici_adi=? AND sifre=?", (ka, si)).fetchone()
+                        u = conn.cursor().execute("SELECT rol, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar WHERE kullanici_adi=? AND sifre=?", (ka, hashli_giris_sifresi)).fetchone()
                     
                     if u:
                         if u[2]==0: st.warning("Oturum onayı bekleniyor.")
                         else: st.session_state.update({'giris_yapildi':True, 'kullanici_adi':ka, 'rol':u[0], 'sorumlu_il':u[1], 'excel_yetkisi':u[3]}); st.rerun()
-                    else: st.error("❌ Hatalı bilgiler.")
+                    else: st.error("❌ Hatalı kullanıcı adı veya şifre.")
+        
         with tk:
             with st.form("register_form"):
-                yk, ys, ye, yil = st.text_input("Kullanıcı Adı"), st.text_input("Şifre"), st.text_input("E-Posta"), st.selectbox("İl", ["Ankara", "İstanbul", "İzmir", "Bursa", "Kocaeli", "Diğer"])
+                yk, ys, ye, yil = st.text_input("Kullanıcı Adı"), st.text_input("Şifre", type="password"), st.text_input("E-Posta"), st.selectbox("İl", ["Ankara", "İstanbul", "İzmir", "Bursa", "Kocaeli", "Diğer"])
                 if st.form_submit_button("Kayıt Talebi Gönder"):
                     try:
+                        # KAYIT: Şifreyi açık metin yerine hashleyerek kaydediyoruz
+                        hashli_yeni_sifre = sifreyi_hashle(ys)
+                        
                         with sqlite3.connect('tse_v4.db', check_same_thread=False) as conn:
-                            conn.cursor().execute("INSERT INTO kullanicilar (kullanici_adi, sifre, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi) VALUES (?, ?, 'kullanici', ?, ?, 0, 0)", (yk, ys, ye, yil))
+                            conn.cursor().execute("INSERT INTO kullanicilar (kullanici_adi, sifre, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi) VALUES (?, ?, 'kullanici', ?, ?, 0, 0)", (yk, hashli_yeni_sifre, ye, yil))
                             conn.commit()
                         threading.Thread(target=admin_bildirim_mail_at, args=("📝 YENİ KAYIT", f"Yeni üye talebi: {yk}")).start()
                         st.success("Tebrikler! Talebiniz iletildi."); time.sleep(1); st.rerun()
@@ -222,7 +234,6 @@ toplam_bekleyen = b_onay + b_silme
 df = verileri_getir()
 
 with st.sidebar:
-    # YENİ: LOGO EKLENTİSİ (YAN MENÜ)
     if os.path.exists("tse_logo.png"):
         st.image("tse_logo.png", use_container_width=True)
         
