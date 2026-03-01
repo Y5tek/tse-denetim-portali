@@ -176,22 +176,34 @@ with tabs[1]:
     if p_id:
         st.warning("⚠️ Marka-Tip çakışması! Yine de şasiyi kaydetmek istiyor musunuz?")
         if st.button("✅ Evet, Kaydet"):
-            durum_guncelle_by_id(p_id, st.session_state.onay_bekleyen_sasi_no, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d"))
-            st.session_state.update({'onay_bekleyen_sasi_id': None, 'onay_bekleyen_sasi_no': None}); st.rerun()
+            try:
+                durum_guncelle_by_id(p_id, st.session_state.onay_bekleyen_sasi_no, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d"))
+                st.session_state.update({'onay_bekleyen_sasi_id': None, 'onay_bekleyen_sasi_no': None}); st.rerun()
+            except sqlite3.IntegrityError:
+                st.error("❌ Hata: Bu Şasi Numarası sistemde zaten mevcut!")
+                st.session_state.update({'onay_bekleyen_sasi_id': None, 'onay_bekleyen_sasi_no': None})
     else:
         c_left, c_right = st.columns(2)
         with c_left:
             st.markdown("#### 🆕 Şasi Atama")
             b_list = i_df[i_df['durum'] == 'Şasi Bekliyor']
-            # basvuru_no güvenli metne çevrildi, boşsa hata vermeyecek
             sel = st.selectbox("Başvuru:", options=(b_list['id'].astype(str) + " | " + b_list['basvuru_no'].astype(str)).tolist(), index=None)
             if sel:
                 sid = int(sel.split(" |")[0]); row_m = b_list[b_list['id'] == sid].iloc[0]
                 vin = st.text_input("VIN Numarası")
                 if st.button("Kaydet ve Teste Gönder"):
-                    conn = sqlite3.connect('tse_v4.db', check_same_thread=False); once = conn.cursor().execute('SELECT id FROM denetimler WHERE firma_adi=? AND marka=? AND arac_tipi=? AND secim_tarihi IS NOT NULL AND id != ?', (row_m['firma_adi'], row_m['marka'], row_m['arac_tipi'], sid)).fetchone(); conn.close()
-                    if once: st.session_state.update({'onay_bekleyen_sasi_id': sid, 'onay_bekleyen_sasi_no': vin}); st.rerun()
-                    else: durum_guncelle_by_id(sid, vin, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d")); st.rerun()
+                    if not vin.strip():
+                        st.error("Lütfen bir Şasi (VIN) Numarası giriniz!")
+                    else:
+                        try:
+                            conn = sqlite3.connect('tse_v4.db', check_same_thread=False); once = conn.cursor().execute('SELECT id FROM denetimler WHERE firma_adi=? AND marka=? AND arac_tipi=? AND secim_tarihi IS NOT NULL AND id != ?', (row_m['firma_adi'], row_m['marka'], row_m['arac_tipi'], sid)).fetchone(); conn.close()
+                            if once: 
+                                st.session_state.update({'onay_bekleyen_sasi_id': sid, 'onay_bekleyen_sasi_no': vin}); st.rerun()
+                            else: 
+                                durum_guncelle_by_id(sid, vin, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d")); st.rerun()
+                        except sqlite3.IntegrityError:
+                            st.error("❌ Hata: Bu Şasi Numarası sistemde zaten kayıtlı!")
+                            
         with c_right:
             st.markdown("#### 🔍 Güncelleme & İlave")
             i_list = i_df[i_df['durum'] != 'Şasi Bekliyor']
@@ -213,7 +225,10 @@ with tabs[2]:
             st.write("Elden Kayıt")
             bn, fa, ma, ti, sn = st.text_input("B.No"), st.text_input("Firma"), st.text_input("Marka"), st.text_input("Tip"), st.text_input("Şasi")
             if st.form_submit_button("Ekle"):
-                conn = sqlite3.connect('tse_v4.db', check_same_thread=False); conn.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, secim_tarihi, il) VALUES (?,?,?,?,?, 'Teste Gönderildi', ?, ?, ?)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il)); conn.commit(); conn.close(); st.rerun()
+                try:
+                    conn = sqlite3.connect('tse_v4.db', check_same_thread=False); conn.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, secim_tarihi, il) VALUES (?,?,?,?,?, 'Teste Gönderildi', ?, ?, ?)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il)); conn.commit(); conn.close(); st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("Bu şasi numarası sistemde mevcut!")
     
     with c_excel:
         up = st.file_uploader("Excel Yükle", type=['xlsx', 'csv'])
@@ -246,7 +261,6 @@ with tabs[2]:
                 if 'durum' not in df_ekle.columns:
                     df_ekle['durum'] = 'Şasi Bekliyor'
                 
-                # --- YENİ: BİRİM SÜTUNUNDAN İL TAHMİN EDİCİ ---
                 def il_tahmin_et(birim_metni):
                     if pd.isna(birim_metni): return st.session_state.sorumlu_il
                     metin = str(birim_metni).upper()
@@ -255,7 +269,7 @@ with tabs[2]:
                     elif "İZMİR" in metin or "IZMIR" in metin: return "İzmir"
                     elif "BURSA" in metin: return "Bursa"
                     elif "KOCAELİ" in metin or "KOCAELI" in metin: return "Kocaeli"
-                    return st.session_state.sorumlu_il # Eşleşme bulamazsa yükleyenin iline atar
+                    return st.session_state.sorumlu_il 
 
                 if 'birim' in df_ekle.columns:
                     df_ekle['il'] = df_ekle['birim'].apply(il_tahmin_et)
@@ -292,86 +306,4 @@ with tabs[2]:
                             for k_mail, k_adi in ilgili_kullanicilar:
                                 if k_mail and "@" in k_mail: 
                                     m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
-                                    m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme yeni veri yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
-                                    threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
-                                    mail_gidenler.append(k_adi)
-                    except Exception as mail_hata:
-                        st.warning(f"Uyarı: Kayıtlar eklendi ancak mail gönderilirken bir hata oluştu: {mail_hata}")
-                    
-                    conn.close()
-                    
-                    eklenen_sayi = len(df_yeni)
-                    atlanan_sayi = len(df_ekle) - eklenen_sayi
-                    
-                    mesaj = f"Tebrikler! {eklenen_sayi} adet YENİ kayıt başarıyla aktarıldı."
-                    if atlanan_sayi > 0:
-                        mesaj += f" ({atlanan_sayi} adet mevcut mükerrer kayıt atlandı.)"
-                    if len(mail_gidenler) > 0:
-                        mesaj += f" Bildirim iletilenler: {', '.join(mail_gidenler)}"
-                        
-                    st.success(mesaj)
-                    time.sleep(3)
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Aktarım sırasında kritik bir hata oluştu: {e}")
-
-if st.session_state.rol == "admin":
-    with tabs[3]:
-        st.subheader("👑 Yönetici Paneli")
-        
-        # --- ONAY VE SİLME TALEPLERİ ---
-        co, cs = st.columns(2)
-        with co:
-            st.markdown(f"**Onay Bekleyen Üyeler ({b_onay})**")
-            conn = sqlite3.connect('tse_v4.db', check_same_thread=False); k_df = pd.read_sql_query("SELECT * FROM kullanicilar WHERE onay_durumu=0", conn); conn.close()
-            for _, r in k_df.iterrows():
-                st.write(f"👤 {r['kullanici_adi']}")
-                if st.button("Onayla", key=f"o_{r['id']}"):
-                    c = sqlite3.connect('tse_v4.db', check_same_thread=False); c.execute("UPDATE kullanicilar SET onay_durumu=1 WHERE id=?", (r['id'],)); c.commit(); c.close(); st.rerun()
-        with cs:
-            st.markdown(f"**Silme Talepleri ({b_silme})**")
-            for _, r in df[df['silme_talebi']==1].iterrows():
-                st.write(f"🗑️ {r['sasi_no']}")
-                if st.button("Kalıcı Sil", key=f"sil_{r['id']}"):
-                    c = sqlite3.connect('tse_v4.db', check_same_thread=False); c.execute("DELETE FROM denetimler WHERE id=?", (r['id'],)); c.commit(); c.close(); st.rerun()
-
-        st.divider() # Görsel bir ayırıcı çizgi
-
-        # --- KULLANICI BİLGİLERİ VE YETKİLENDİRME ---
-        st.subheader("👥 Kullanıcı Yönetimi")
-        conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-        tum_kullanicilar_df = pd.read_sql_query("SELECT id, kullanici_adi, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar", conn)
-        
-        # Kullanıcıların tablosunu gösteriyoruz
-        st.dataframe(tum_kullanicilar_df, use_container_width=True)
-
-        c_yetki, c_kayit_sil = st.columns(2)
-        
-        with c_yetki:
-            st.markdown("**Excel Yükleme Yetkisi Düzenle**")
-            secili_kullanici = st.selectbox("Kullanıcı Seçin", tum_kullanicilar_df['kullanici_adi'].tolist(), key="yetki_kullanici")
-            if secili_kullanici:
-                mevcut_yetki = tum_kullanicilar_df[tum_kullanicilar_df['kullanici_adi'] == secili_kullanici]['excel_yukleme_yetkisi'].iloc[0]
-                yeni_yetki = st.radio("Yetki Durumu:", [1, 0], index=0 if mevcut_yetki == 1 else 1, format_func=lambda x: "Yetkili (1)" if x == 1 else "Yetkisiz (0)")
-                if st.button("Yetkiyi Güncelle"):
-                    c = sqlite3.connect('tse_v4.db', check_same_thread=False)
-                    c.execute("UPDATE kullanicilar SET excel_yukleme_yetkisi=? WHERE kullanici_adi=?", (yeni_yetki, secili_kullanici))
-                    c.commit(); c.close()
-                    st.success(f"{secili_kullanici} kullanıcısının yetkisi güncellendi.")
-                    time.sleep(1); st.rerun()
-
-        # --- YÖNETİCİ DOĞRUDAN KAYIT SİLME ---
-        with c_kayit_sil:
-            st.markdown("**Tablodan Doğrudan Kayıt Silme**")
-            st.info("⚠️ Buradan silinen kayıtlar geri getirilemez.")
-            silinecek_secim = st.selectbox("Silinecek Kaydı Seç (Şasi veya Başvuru No)", options=["Seçiniz..."] + (df['id'].astype(str) + " | Şasi: " + df['sasi_no'].fillna('-').astype(str) + " | Başvuru: " + df['basvuru_no'].fillna('-').astype(str)).tolist())
-            
-            if silinecek_secim != "Seçiniz..." and st.button("🚨 Kaydı Kalıcı Olarak Sil"):
-                sil_id = int(silinecek_secim.split(" |")[0])
-                c = sqlite3.connect('tse_v4.db', check_same_thread=False)
-                c.execute("DELETE FROM denetimler WHERE id=?", (sil_id,))
-                c.commit(); c.close()
-                st.success("Kayıt sistemden kalıcı olarak silindi.")
-                time.sleep(1); st.rerun()
-        
-        conn.close()
+                                    m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz
