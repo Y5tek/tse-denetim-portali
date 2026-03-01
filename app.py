@@ -56,6 +56,17 @@ def admin_bildirim_mail_at(konu, icerik):
         server.send_message(msg); server.quit()
     except: pass
 
+# --- YENİ EKLENEN: KULLANICIYA ÖZEL BİLDİRİM MAİLİ ---
+def kullanici_bildirim_mail_at(kime_mail, konu, icerik):
+    msg = MIMEMultipart()
+    msg['From'], msg['To'], msg['Subject'] = GONDERICI_MAIL, kime_mail, konu
+    msg.attach(MIMEText(f"<html><body><h3>TSE Bildirim</h3><p>{icerik}</p></body></html>", 'html'))
+    try:
+        server = smtplib.SMTP_SSL(SMTP_SUNUCU, SMTP_PORT)
+        server.login(GONDERICI_MAIL, GONDERICI_SIFRE)
+        server.send_message(msg); server.quit()
+    except: pass
+
 # --- 2. DURUM SORGULARI (SEKMELERDEN ÖNCE ÇALIŞIR) ---
 def durum_sayilarini_al():
     conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
@@ -267,10 +278,26 @@ with tabs[2]:
                 # Veritabanına aktarma aşaması
                 conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
                 df_ekle.to_sql('denetimler', conn, if_exists='append', index=False)
+                
+                # --- YENİ EKLENEN KISIM: İLGİLİ KULLANICILARA MAİL BİLDİRİMİ ---
+                try:
+                    unique_iller = df_ekle['il'].unique().tolist()
+                    for il_adi in unique_iller:
+                        # Bu ilden sorumlu onaylı kullanıcıları buluyoruz
+                        ilgili_kullanicilar = conn.cursor().execute("SELECT email, kullanici_adi FROM kullanicilar WHERE sorumlu_il=? AND onay_durumu=1", (il_adi,)).fetchall()
+                        for k_mail, k_adi in ilgili_kullanicilar:
+                            if k_mail and "@" in k_mail: # E-posta adresi geçerli mi diye basit bir kontrol
+                                m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
+                                m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için yeni excel veri girişi yapılmıştır. Lütfen sisteme giriş yaparak numune kayıt (şasi atama) işlemlerini tamamlayınız."
+                                # İşlemi yavaşlatmamak için maili arka planda (thread) atıyoruz
+                                threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
+                except Exception as mail_hata:
+                    pass # Mail atarken bir sorun çıkarsa programın çökmesini engeller
+                    
                 conn.close()
                 
-                st.success("Tebrikler! Dosya başarıyla veritabanına aktarıldı.")
-                time.sleep(1)
+                st.success("Tebrikler! Dosya başarıyla veritabanına aktarıldı ve ilgili kişilere bildirim gönderildi.")
+                time.sleep(2)
                 st.rerun()
             except Exception as e:
                 st.error(f"Aktarım sırasında bir hata oluştu: {e}")
