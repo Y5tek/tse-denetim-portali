@@ -183,7 +183,8 @@ with tabs[1]:
         with c_left:
             st.markdown("#### 🆕 Şasi Atama")
             b_list = i_df[i_df['durum'] == 'Şasi Bekliyor']
-            sel = st.selectbox("Başvuru:", options=(b_list['id'].astype(str) + " | " + b_list['basvuru_no']).tolist(), index=None)
+            # basvuru_no güvenli metne çevrildi, boşsa hata vermeyecek
+            sel = st.selectbox("Başvuru:", options=(b_list['id'].astype(str) + " | " + b_list['basvuru_no'].astype(str)).tolist(), index=None)
             if sel:
                 sid = int(sel.split(" |")[0]); row_m = b_list[b_list['id'] == sid].iloc[0]
                 vin = st.text_input("VIN Numarası")
@@ -194,7 +195,7 @@ with tabs[1]:
         with c_right:
             st.markdown("#### 🔍 Güncelleme & İlave")
             i_list = i_df[i_df['durum'] != 'Şasi Bekliyor']
-            srch = st.selectbox("Şasi/Firma Ara:", options=(i_list['id'].astype(str) + " | " + i_list['sasi_no']).tolist(), index=None)
+            srch = st.selectbox("Şasi/Firma Ara:", options=(i_list['id'].astype(str) + " | " + i_list['sasi_no'].astype(str)).tolist(), index=None)
             if srch:
                 sid = int(srch.split(" |")[0]); cur = i_list[i_list['id'] == sid].iloc[0]
                 with st.form("upd_form"):
@@ -242,10 +243,24 @@ with tabs[2]:
                 df_ekle.rename(columns=sutun_haritasi, inplace=True)
                 
                 df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
-                if 'il' not in df_ekle.columns:
-                    df_ekle['il'] = st.session_state.sorumlu_il
                 if 'durum' not in df_ekle.columns:
                     df_ekle['durum'] = 'Şasi Bekliyor'
+                
+                # --- YENİ: BİRİM SÜTUNUNDAN İL TAHMİN EDİCİ ---
+                def il_tahmin_et(birim_metni):
+                    if pd.isna(birim_metni): return st.session_state.sorumlu_il
+                    metin = str(birim_metni).upper()
+                    if "ANKARA" in metin: return "Ankara"
+                    elif "İSTANBUL" in metin or "ISTANBUL" in metin: return "İstanbul"
+                    elif "İZMİR" in metin or "IZMIR" in metin: return "İzmir"
+                    elif "BURSA" in metin: return "Bursa"
+                    elif "KOCAELİ" in metin or "KOCAELI" in metin: return "Kocaeli"
+                    return st.session_state.sorumlu_il # Eşleşme bulamazsa yükleyenin iline atar
+
+                if 'birim' in df_ekle.columns:
+                    df_ekle['il'] = df_ekle['birim'].apply(il_tahmin_et)
+                elif 'il' not in df_ekle.columns:
+                    df_ekle['il'] = st.session_state.sorumlu_il
                 
                 gecerli_sutunlar = ['basvuru_no', 'firma_adi', 'marka', 'arac_kategori', 'arac_tipi', 
                                     'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 'birim', 'uretim_ulkesi', 
@@ -322,7 +337,7 @@ if st.session_state.rol == "admin":
 
         st.divider() # Görsel bir ayırıcı çizgi
 
-        # --- YENİ EKLENEN: KULLANICI BİLGİLERİ VE YETKİLENDİRME ---
+        # --- KULLANICI BİLGİLERİ VE YETKİLENDİRME ---
         st.subheader("👥 Kullanıcı Yönetimi")
         conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
         tum_kullanicilar_df = pd.read_sql_query("SELECT id, kullanici_adi, rol, email, sorumlu_il, onay_durumu, excel_yukleme_yetkisi FROM kullanicilar", conn)
@@ -345,12 +360,11 @@ if st.session_state.rol == "admin":
                     st.success(f"{secili_kullanici} kullanıcısının yetkisi güncellendi.")
                     time.sleep(1); st.rerun()
 
-        # --- YENİ EKLENEN: YÖNETİCİ DOĞRUDAN KAYIT SİLME ---
+        # --- YÖNETİCİ DOĞRUDAN KAYIT SİLME ---
         with c_kayit_sil:
             st.markdown("**Tablodan Doğrudan Kayıt Silme**")
             st.info("⚠️ Buradan silinen kayıtlar geri getirilemez.")
-            # Silinecek kaydı arayarak bulması için seçenek sunuyoruz
-            silinecek_secim = st.selectbox("Silinecek Kaydı Seç (Şasi veya Başvuru No)", options=["Seçiniz..."] + (df['id'].astype(str) + " | Şasi: " + df['sasi_no'] + " | Başvuru: " + df['basvuru_no']).tolist())
+            silinecek_secim = st.selectbox("Silinecek Kaydı Seç (Şasi veya Başvuru No)", options=["Seçiniz..."] + (df['id'].astype(str) + " | Şasi: " + df['sasi_no'].fillna('-').astype(str) + " | Başvuru: " + df['basvuru_no'].fillna('-').astype(str)).tolist())
             
             if silinecek_secim != "Seçiniz..." and st.button("🚨 Kaydı Kalıcı Olarak Sil"):
                 sil_id = int(silinecek_secim.split(" |")[0])
