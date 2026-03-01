@@ -11,7 +11,7 @@ import time
 import os # YENİ: Dosya (logo) kontrolü için eklendi
 
 # --- KULLANIM KILAVUZU METNİ ---
-KILAVUZ_METNI = """# 🇹🇷 TSE DENETİM PORTALI - KULLANIM KILAVUZU VE SİSTEM ÖZETİ
+KILAVUZ_METNI = """# 🇹🇷 TSE NUMUNE TAKİP PORTALI - KULLANIM KILAVUZU VE SİSTEM ÖZETİ
 
 Bu proje, kurum içindeki başvuru, numune atama (şasi eşleştirme) ve denetim süreçlerini dijitalleştirmek, kullanıcıları illere göre yönetmek ve süreçleri otomatik e-posta bildirimleriyle hızlandırmak amacıyla geliştirilmiştir.
 
