@@ -10,25 +10,22 @@ from email.mime.multipart import MIMEMultipart
 import time
 
 # --- SAYFA YAPILANDIRMASI (MAKSİMUM GENİŞLİK İÇİN EKLENDİ) ---
-# Bu komut sayfanın tüm ekranı kaplamasını sağlar. Streamlit'te ilk komut olmalıdır.
 st.set_page_config(page_title="TSE Denetim Portalı", layout="wide")
 
 # --- TSE KURUMSAL VE MAİL AYARLARI ---
-# Streamlit Secrets üzerinden güvenli bilgiler çekiliyor
 try:
     GONDERICI_MAIL = st.secrets["GONDERICI_MAIL"]
-    GONDERICI_SIFRE = st.secrets["GONDERICI_SIFRE"].replace(" ", "") # Boşlukları otomatik temizler
+    GONDERICI_SIFRE = st.secrets["GONDERICI_SIFRE"].replace(" ", "") 
     ADMIN_MAIL = st.secrets["ADMIN_MAIL"]
 except Exception:
     st.error("Kritik Hata: Streamlit Secrets (Mail ayarları) bulunamadı!")
     st.stop()
 
 SMTP_SUNUCU = "smtp.gmail.com"
-SMTP_PORT = 465 # SSL Portu Cloud ortamı için en kararlısıdır
+SMTP_PORT = 465 
 
 # --- 1. VERİTABANI MOTORU ---
 def veritabanini_hazirla():
-    # Çoklu kullanıcı hatalarını önlemek için check_same_thread=False eklendi
     conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS denetimler (
@@ -50,13 +47,11 @@ def admin_bildirim_mail_at(konu, icerik):
     msg['From'], msg['To'], msg['Subject'] = GONDERICI_MAIL, ADMIN_MAIL, konu
     msg.attach(MIMEText(f"<html><body><h3>TSE Bildirim</h3><p>{icerik}</p></body></html>", 'html'))
     try:
-        # Port 465 (SSL) Cloud sunucuları için daha uyumludur
         server = smtplib.SMTP_SSL(SMTP_SUNUCU, SMTP_PORT)
         server.login(GONDERICI_MAIL, GONDERICI_SIFRE)
         server.send_message(msg); server.quit()
     except: pass
 
-# --- YENİ EKLENEN: KULLANICIYA ÖZEL BİLDİRİM MAİLİ ---
 def kullanici_bildirim_mail_at(kime_mail, konu, icerik):
     msg = MIMEMultipart()
     msg['From'], msg['To'], msg['Subject'] = GONDERICI_MAIL, kime_mail, konu
@@ -67,7 +62,7 @@ def kullanici_bildirim_mail_at(kime_mail, konu, icerik):
         server.send_message(msg); server.quit()
     except: pass
 
-# --- 2. DURUM SORGULARI (SEKMELERDEN ÖNCE ÇALIŞIR) ---
+# --- 2. DURUM SORGULARI ---
 def durum_sayilarini_al():
     conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
     onay_sayisi = conn.execute("SELECT COUNT(*) FROM kullanicilar WHERE onay_durumu = 0").fetchone()[0]
@@ -131,13 +126,10 @@ if not st.session_state.giris_yapildi:
     st.stop()
 
 # --- 5. ANA EKRAN (GİRİŞ SONRASI) ---
-
-# SAYILARI EN BAŞTA ÇEK (TAB İSİMLERİ İÇİN)
 b_onay, b_silme = durum_sayilarini_al()
 toplam_bekleyen = b_onay + b_silme
 df = verileri_getir()
 
-# YAN MENÜ
 with st.sidebar:
     st.markdown("<h2 style='color: #E03131;'>TSE PANEL</h2>", unsafe_allow_html=True)
     st.write(f"👤 **{st.session_state.kullanici_adi}**")
@@ -148,16 +140,13 @@ with st.sidebar:
     if st.button("🚪 Oturumu Kapat", use_container_width=True):
         st.session_state.clear(); st.rerun()
 
-# ADMİN BİLDİRİM BARI (SEKMELERİN ÜSTÜNDE)
 if st.session_state.rol == "admin" and toplam_bekleyen > 0:
     st.error(f"📢 **Yönetici Bildirimi:** Şu an onay bekleyen **{b_onay} üye** ve **{b_silme} silme talebi** var.")
 
-# SEKME TANIMLARI
 admin_tab_label = f"👑 Yönetici Paneli ({toplam_bekleyen})" if (st.session_state.rol == "admin" and toplam_bekleyen > 0) else "👑 Yönetici Paneli"
 main_tabs = ["📊 Ana Tablo", "🛠️ Numune Kayıt Girişi", "📥 Veri Girişi"]
 if st.session_state.rol == "admin": main_tabs.append(admin_tab_label)
 
-# SEKMELERİ ÇİZ (key="main_tabs_key" sayesinde yenilemelerde sekmeyi korur)
 tabs = st.tabs(main_tabs)
 
 with tabs[0]:
@@ -167,15 +156,12 @@ with tabs[0]:
     c_m2.metric("Teste Gönderildi", len(df[df['durum'] == 'Teste Gönderildi']))
     c_m3.metric("Olumlu", len(df[df['durum'] == 'Tamamlandı - Olumlu']))
     
-    # Sütun Sıralama ve Temizlik
     istenen = ['sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_tipi', 'firma_adi', 'arac_kategori', 'birim', 'il']
     display_df = df[[c for c in istenen if c in df.columns] + [c for c in df.columns if c not in istenen and c not in ['secim_tarihi_dt', 'silme_talebi']]]
     
-    # Arama
     src = st.text_input("🔍 Filtrele (Şasi, Marka, Firma vb.):")
     if src: display_df = display_df[display_df.apply(lambda r: src.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # MAKSİMUM BÜYÜKLÜK İÇİN height=800 OLARAK REVİZE EDİLDİ
     st.dataframe(display_df.style.apply(satir_boya, axis=1), use_container_width=True, height=800)
     
     buffer = io.BytesIO()
@@ -183,7 +169,6 @@ with tabs[0]:
     st.download_button("📥 Excel İndir", buffer.getvalue(), f"TSE_Rapor_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
 
 with tabs[1]:
-    # NUMUNE İŞLEMLERİ
     st.subheader("İşlem Paneli")
     i_df = df if st.session_state.rol == "admin" else df[(df['il'] == st.session_state.sorumlu_il) | (df['ekleyen_kullanici'] == st.session_state.kullanici_adi)]
     
@@ -238,8 +223,6 @@ with tabs[2]:
                 else:
                     df_ekle = pd.read_excel(up)
                 
-                # --- DOSYAYA GÖRE BİREBİR EŞLEŞTİRME VE TEMİZLİK ---
-                # Gönderdiğiniz örnek dosyadaki başlıkları veritabanına uyarlıyoruz
                 sutun_haritasi = {
                     "BasvuruNo": "basvuru_no",
                     "Firma": "firma_adi",
@@ -255,52 +238,75 @@ with tabs[2]:
                     "Araç Sayısı": "arac_sayisi"
                 }
                 
-                # Sütun isimlerindeki olası boşlukları temizleyip haritaya göre yeniden adlandırıyoruz
                 df_ekle.columns = df_ekle.columns.str.strip()
                 df_ekle.rename(columns=sutun_haritasi, inplace=True)
                 
-                # Veritabanında zorunlu olan ama Excel'de olmayan sistem verileri
                 df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
                 if 'il' not in df_ekle.columns:
                     df_ekle['il'] = st.session_state.sorumlu_il
                 if 'durum' not in df_ekle.columns:
                     df_ekle['durum'] = 'Şasi Bekliyor'
                 
-                # GÜVENLİK FİLTRESİ: Hata almamak için SADECE veritabanımızda geçerli olan sütunları bırakıyoruz
                 gecerli_sutunlar = ['basvuru_no', 'firma_adi', 'marka', 'arac_kategori', 'arac_tipi', 
                                     'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 'birim', 'uretim_ulkesi', 
                                     'arac_sayisi', 'sasi_no', 'basvuru_tarihi', 'secim_tarihi', 'il', 'durum', 
                                     'notlar', 'guncelleme_tarihi', 'ekleyen_kullanici', 'silme_talebi', 'silme_nedeni']
                 
-                # Tabloyu sadece desteklenen sütunlardan ibaret hale getiriyoruz
                 df_ekle = df_ekle[[col for col in df_ekle.columns if col in gecerli_sutunlar]]
                 
-                # Veritabanına aktarma aşaması
+                # --- ÇÖZÜM 1: MÜKERRER KAYIT (ÇİFT KAYIT) KONTROLÜ ---
                 conn = sqlite3.connect('tse_v4.db', check_same_thread=False)
-                df_ekle.to_sql('denetimler', conn, if_exists='append', index=False)
                 
-                # --- YENİ EKLENEN KISIM: İLGİLİ KULLANICILARA MAİL BİLDİRİMİ ---
-                try:
-                    unique_iller = df_ekle['il'].unique().tolist()
-                    for il_adi in unique_iller:
-                        # Bu ilden sorumlu onaylı kullanıcıları buluyoruz
-                        ilgili_kullanicilar = conn.cursor().execute("SELECT email, kullanici_adi FROM kullanicilar WHERE sorumlu_il=? AND onay_durumu=1", (il_adi,)).fetchall()
-                        for k_mail, k_adi in ilgili_kullanicilar:
-                            if k_mail and "@" in k_mail: # E-posta adresi geçerli mi diye basit bir kontrol
-                                m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
-                                m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için yeni excel veri girişi yapılmıştır. Lütfen sisteme giriş yaparak numune kayıt (şasi atama) işlemlerini tamamlayınız."
-                                # İşlemi yavaşlatmamak için maili arka planda (thread) atıyoruz
-                                threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
-                except Exception as mail_hata:
-                    pass # Mail atarken bir sorun çıkarsa programın çökmesini engeller
+                # Veritabanındaki mevcut başvuru numaralarını çekiyoruz
+                mevcut_kayitlar = pd.read_sql_query("SELECT basvuru_no FROM denetimler", conn)
+                mevcut_basvuru_listesi = mevcut_kayitlar['basvuru_no'].astype(str).tolist()
+                
+                # Excel'deki verilerin başvuru numarasını string (metin) formata çevirip karşılaştırıyoruz
+                df_ekle['basvuru_no_str'] = df_ekle['basvuru_no'].astype(str)
+                # SADECE veritabanında olmayanları (yeni olanları) alıyoruz
+                df_yeni = df_ekle[~df_ekle['basvuru_no_str'].isin(mevcut_basvuru_listesi)].copy()
+                df_yeni.drop(columns=['basvuru_no_str'], inplace=True) # Karşılaştırma sütununu siliyoruz
+                
+                if len(df_yeni) == 0:
+                    st.warning("⚠️ Yüklediğiniz dosyadaki tüm kayıtlar zaten sistemde mevcut! Mükerrer kayıt engellendi.")
+                    conn.close()
+                else:
+                    # Sadece YENİ kayıtları veritabanına ekliyoruz
+                    df_yeni.to_sql('denetimler', conn, if_exists='append', index=False)
                     
-                conn.close()
-                
-                st.success("Tebrikler! Dosya başarıyla veritabanına aktarıldı ve ilgili kişilere bildirim gönderildi.")
-                time.sleep(2)
-                st.rerun()
+                    # --- ÇÖZÜM 2: GÜVENLİ KULLANICI BİLDİRİM MAİLİ ---
+                    mail_gidenler = []
+                    try:
+                        unique_iller = df_yeni['il'].unique().tolist()
+                        cursor = conn.cursor()
+                        for il_adi in unique_iller:
+                            ilgili_kullanicilar = cursor.execute("SELECT email, kullanici_adi FROM kullanicilar WHERE sorumlu_il=? AND onay_durumu=1", (il_adi,)).fetchall()
+                            for k_mail, k_adi in ilgili_kullanicilar:
+                                if k_mail and "@" in k_mail: # Geçerli bir e-posta mı diye basit bir kontrol
+                                    m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
+                                    m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme yeni veri yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
+                                    threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
+                                    mail_gidenler.append(k_adi)
+                    except Exception as mail_hata:
+                        st.warning(f"Uyarı: Kayıtlar eklendi ancak mail gönderilirken bir hata oluştu: {mail_hata}")
+                    
+                    conn.close()
+                    
+                    # Kullanıcıya detaylı sonuç mesajı gösteriyoruz
+                    eklenen_sayi = len(df_yeni)
+                    atlanan_sayi = len(df_ekle) - eklenen_sayi
+                    
+                    mesaj = f"Tebrikler! {eklenen_sayi} adet YENİ kayıt başarıyla aktarıldı."
+                    if atlanan_sayi > 0:
+                        mesaj += f" ({atlanan_sayi} adet mevcut mükerrer kayıt atlandı.)"
+                    if len(mail_gidenler) > 0:
+                        mesaj += f" Bildirim iletilenler: {', '.join(mail_gidenler)}"
+                        
+                    st.success(mesaj)
+                    time.sleep(3) # Kullanıcının mesajı okuyabilmesi için biraz süre tanıdık
+                    st.rerun()
             except Exception as e:
-                st.error(f"Aktarım sırasında bir hata oluştu: {e}")
+                st.error(f"Aktarım sırasında kritik bir hata oluştu: {e}")
 
 if st.session_state.rol == "admin":
     with tabs[3]:
