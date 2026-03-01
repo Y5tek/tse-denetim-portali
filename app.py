@@ -51,7 +51,7 @@ Tüm verilerin izlendiği ana gösterge panelidir.
 """
 
 # --- SAYFA YAPILANDIRMASI ---
-st.set_page_config(page_title="TSE Denetim Portalı", layout="wide")
+st.set_page_config(page_title="TSE NUMUNE TAKİP PORTALI", layout="wide")
 
 # --- TSE KURUMSAL VE MAİL AYARLARI ---
 try:
