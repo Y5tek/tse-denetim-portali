@@ -297,18 +297,27 @@ with tabs[2]:
                 else:
                     df_yeni.to_sql('denetimler', conn, if_exists='append', index=False)
                     
+                    # --- YENİ EKLENEN: İLLERE GÖRE KULLANICI BULMA VE ÖZEL MAİL ATMA ---
                     mail_gidenler = []
                     try:
-                        unique_iller = df_yeni['il'].unique().tolist()
+                        # Yeni yüklenen verilerdeki illerin ve o ile ait kaç kayıt olduğunun özetini çıkarıyoruz
+                        il_ozeti = df_yeni['il'].value_counts().to_dict()
                         cursor = conn.cursor()
-                        for il_adi in unique_iller:
+                        
+                        # Her bir il için döngü oluşturuyoruz
+                        for il_adi, adet in il_ozeti.items():
+                            # Sadece o ilden sorumlu onaylı kullanıcıları buluyoruz
                             ilgili_kullanicilar = cursor.execute("SELECT email, kullanici_adi FROM kullanicilar WHERE sorumlu_il=? AND onay_durumu=1", (il_adi,)).fetchall()
+                            
                             for k_mail, k_adi in ilgili_kullanicilar:
                                 if k_mail and "@" in k_mail: 
                                     m_konu = f"TSE Sistemi - {il_adi} İli İçin Yeni Veri Girişi"
-                                    m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme yeni veri yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
+                                    # Maile o il için özel kaç adet kayıt yüklendiğini de yazıyoruz
+                                    m_icerik = f"Merhaba <b>{k_adi}</b>,<br><br>Sistemde sorumlu olduğunuz <b>{il_adi}</b> ili için sisteme <b>{adet} adet</b> yeni kayıt yüklenmiştir. Lütfen portal üzerinden numune/şasi atama işlemlerini tamamlayınız."
                                     threading.Thread(target=kullanici_bildirim_mail_at, args=(k_mail, m_konu, m_icerik)).start()
-                                    mail_gidenler.append(k_adi)
+                                    # Ekranda göstermek üzere kişinin adını ve ilini listeye kaydediyoruz
+                                    mail_gidenler.append(f"{k_adi} ({il_adi})")
+                                    
                     except Exception as mail_hata:
                         st.warning(f"Uyarı: Kayıtlar eklendi ancak mail gönderilirken bir hata oluştu: {mail_hata}")
                     
@@ -358,7 +367,6 @@ if st.session_state.rol == "admin":
         
         st.dataframe(tum_kullanicilar_df, use_container_width=True)
 
-        # ARTIK 3 SÜTUNUMUZ VAR: Yetki, Kayıt Sil, Kullanıcı Sil
         c_yetki, c_kayit_sil, c_kullanici_sil = st.columns(3)
         
         with c_yetki:
@@ -386,7 +394,6 @@ if st.session_state.rol == "admin":
                 st.success("Kayıt kalıcı olarak silindi.")
                 time.sleep(1); st.rerun()
                 
-        # --- YENİ EKLENEN: KULLANICI HESABINI SİLME ---
         with c_kullanici_sil:
             st.markdown("**Kullanıcı Hesabını Sil**")
             st.info("⚠️ Silinen kullanıcı geri getirilemez.")
