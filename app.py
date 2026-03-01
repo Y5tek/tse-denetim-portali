@@ -211,10 +211,35 @@ with tabs[2]:
             bn, fa, ma, ti, sn = st.text_input("B.No"), st.text_input("Firma"), st.text_input("Marka"), st.text_input("Tip"), st.text_input("Şasi")
             if st.form_submit_button("Ekle"):
                 conn = sqlite3.connect('tse_v4.db'); conn.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, secim_tarihi, il) VALUES (?,?,?,?,?, 'Teste Gönderildi', ?, ?, ?)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il)); conn.commit(); conn.close(); st.rerun()
+    
     with c_excel:
         up = st.file_uploader("Excel Yükle", type=['xlsx', 'csv'])
         if up and st.button("Sisteme Aktar"):
-            st.success("Aktarıldı."); st.rerun()
+            try:
+                # Dosya türüne göre Pandas ile oku
+                if up.name.endswith('.csv'):
+                    df_ekle = pd.read_csv(up)
+                else:
+                    df_ekle = pd.read_excel(up)
+                
+                # Excelde olmasa da sistemin ihtiyaç duyduğu arka plan bilgilerini otomatik ekleyelim
+                df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
+                if 'il' not in df_ekle.columns:
+                    df_ekle['il'] = st.session_state.sorumlu_il
+                if 'durum' not in df_ekle.columns:
+                    df_ekle['durum'] = 'Şasi Bekliyor' # Yeni kayıtların varsayılan durumu
+                
+                # Veritabanına aktar
+                conn = sqlite3.connect('tse_v4.db')
+                df_ekle.to_sql('denetimler', conn, if_exists='append', index=False)
+                conn.close()
+                
+                st.success("Tebrikler! Dosya başarıyla veritabanına aktarıldı.")
+                time.sleep(1) # Başarı mesajını kullanıcının okuyabilmesi için kısa bir bekleme
+                st.rerun()
+            except Exception as e:
+                # Olası bir sütun uyuşmazlığı veya hata durumunda program çökmeden uyarı verir
+                st.error(f"Aktarım sırasında bir hata oluştu: {e}")
 
 if st.session_state.rol == "admin":
     with tabs[3]:
