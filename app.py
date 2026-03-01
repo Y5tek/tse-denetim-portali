@@ -205,18 +205,91 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("📥 Veri Girişi")
     c_form, c_excel = st.columns(2)
+    
     with c_form:
+        # Mevcut manuel form kodun burada kalabilir...
         with st.form("manuel_form"):
-            st.write("Elden Kayıt")
-            bn, fa, ma, ti, sn = st.text_input("B.No"), st.text_input("Firma"), st.text_input("Marka"), st.text_input("Tip"), st.text_input("Şasi")
+            st.write("### Elden Kayıt")
+            bn = st.text_input("Başvuru No")
+            fa = st.text_input("Firma Adı")
+            ma = st.text_input("Marka")
+            ti = st.text_input("Araç Tipi")
+            sn = st.text_input("Şasi No (Opsiyonel)")
             if st.form_submit_button("Ekle"):
-                conn = sqlite3.connect('tse_v4.db'); conn.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, secim_tarihi, il) VALUES (?,?,?,?,?, 'Teste Gönderildi', ?, ?, ?)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il)); conn.commit(); conn.close(); st.rerun()
-    with c_excel:
-        up = st.file_uploader("Excel Yükle", type=['xlsx', 'csv'])
-        if up and st.button("Sisteme Aktar"):
-            st.success("Aktarıldı."); st.rerun()
+                if fa and ti:
+                    conn = sqlite3.connect('tse_v4.db')
+                    try:
+                        conn.cursor().execute("""INSERT INTO denetimler 
+                            (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, durum, basvuru_tarihi, secim_tarihi, il, ekleyen_kullanici) 
+                            VALUES (?,?,?,?,?,?, ?, ?, ?, ?)""", 
+                            (fa, ma, ti, sn if sn else None, bn, 'Şasi Bekliyor', 
+                             datetime.now().strftime("%Y-%m-%d"), None, 
+                             st.session_state.sorumlu_il, st.session_state.kullanici_adi))
+                        conn.commit()
+                        st.success("Kayıt başarıyla eklendi.")
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
+                    finally:
+                        conn.close()
+                        st.rerun()
 
-if st.session_state.rol == "admin":
+    with c_excel:
+        st.write("### Excel ile Toplu Yükleme")
+        st.info("Excel sütunları şu sırada olmalıdır: basvuru_no, firma_adi, marka, arac_tipi, arac_kategori, gtip_no")
+        
+        up = st.file_uploader("Dosya Seçin", type=['xlsx', 'csv'])
+        
+        if up:
+            try:
+                # Dosya tipine göre oku
+                if up.name.endswith('.csv'):
+                    yuklenen_df = pd.read_csv(up)
+                else:
+                    yuklenen_df = pd.read_excel(up)
+                
+                st.write("Yüklenecek Veri Önizleme:")
+                st.dataframe(yuklenen_df.head(3))
+                
+                if st.button("Veritabanına Aktar"):
+                    conn = sqlite3.connect('tse_v4.db')
+                    basarili_sayisi = 0
+                    hata_sayisi = 0
+                    
+                    for index, row in yuklenen_df.iterrows():
+                        try:
+                            # NaN değerleri None (NULL) olarak değiştir
+                            row = row.where(pd.notnull(row), None)
+                            
+                            conn.cursor().execute("""
+                                INSERT INTO denetimler 
+                                (basvuru_no, firma_adi, marka, arac_tipi, arac_kategori, gtip_no, 
+                                 durum, basvuru_tarihi, il, ekleyen_kullanici) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                str(row.get('basvuru_no', '-')), 
+                                str(row.get('firma_adi', 'Bilinmiyor')), 
+                                str(row.get('marka', '-')), 
+                                str(row.get('arac_tipi', '-')), 
+                                str(row.get('arac_kategori', '-')), 
+                                str(row.get('gtip_no', '-')),
+                                'Şasi Bekliyor',
+                                datetime.now().strftime("%Y-%m-%d"),
+                                st.session_state.sorumlu_il,
+                                st.session_state.kullanici_adi
+                            ))
+                            basarili_sayisi += 1
+                        except Exception as e:
+                            hata_sayisi += 1
+                            continue
+                    
+                    conn.commit()
+                    conn.close()
+                    st.success(f"İşlem Tamamlandı! {basarili_sayisi} kayıt eklendi. {hata_sayisi} hata oluştu.")
+                    time.sleep(2)
+                    st.rerun()
+                    
+            except Exception as e:
+                st.error(f"Dosya okunurken hata oluştu: {e}")
     with tabs[3]:
         st.subheader("👑 Yönetici Paneli")
         co, cs = st.columns(2)
