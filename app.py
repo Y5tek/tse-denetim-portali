@@ -12,6 +12,7 @@ import hashlib
 import psycopg2
 from sqlalchemy import create_engine
 from contextlib import contextmanager
+import numpy as np
 
 # --- KULLANIM KILAVUZU METNİ ---
 KILAVUZ_METNI = """# 🇹🇷 TSE NUMUNE TAKİP PORTALI - KULLANIM KILAVUZU VE SİSTEM ÖZETİ
@@ -38,7 +39,7 @@ Tüm verilerin izlendiği ana gösterge panelidir. Akıllı Arama ile tüm tablo
 
 ### 📥 Sekme 3: Veri Girişi (Manuel & Excel)
 * Elden Kayıt: Tekil kayıtlar form aracılığıyla eklenebilir.
-* Excel ile Toplu Yükleme: Sütun eşleştirme, akıllı il tahmini ve mükerrer firma/marka/tip kontrolü yapılarak veriler güvenle sisteme aktarılır.
+* Excel ile Toplu Yükleme: Akıllı sütun eşleştirme, il tahmini ve mükerrer kayıt kontrolü yapılarak veriler güvenle sisteme aktarılır.
 
 ### 👑 Sekme 4: Yönetici Paneli (Sadece Adminler)
 Onay bekleyen üyeler ve silme talepleri yönetilir. Kullanıcılara yetkiler atanabilir.
@@ -123,6 +124,10 @@ def kullanici_bildirim_mail_at(kime_mail, konu, icerik):
 # --- YARDIMCI İŞLEMLER ---
 def excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi):
     mail_gidenler = []
+    
+    # Boş verileri güvenli hale getir (NaN'ları "-" veya None yap)
+    df_yeni = df_yeni.replace({np.nan: None})
+    
     df_yeni.to_sql('denetimler', engine, if_exists='append', index=False)
     
     try:
@@ -152,6 +157,29 @@ def excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi):
     time.sleep(3)
     st.rerun()
 
+# --- AKILLI SÜTUN EŞLEŞTİRME (YENİ) ---
+def akilli_sutun_eslestir(df_columns):
+    yeni_kolonlar = {}
+    for col in df_columns:
+        # Boşlukları sil, küçük harfe çevir, Türkçe karakterleri normalize et
+        temiz_col = str(col).lower().replace(" ", "").replace("_", "").replace(".", "")
+        temiz_col = temiz_col.replace("ş", "s").replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ç", "c").replace("ö", "o")
+        
+        if "basvuru" in temiz_col: yeni_kolonlar[col] = "basvuru_no"
+        elif "firma" in temiz_col or "kurum" in temiz_col: yeni_kolonlar[col] = "firma_adi"
+        elif "marka" in temiz_col: yeni_kolonlar[col] = "marka"
+        elif "kategori" in temiz_col: yeni_kolonlar[col] = "arac_kategori"
+        elif "tip" in temiz_col: yeni_kolonlar[col] = "arac_tipi"
+        elif "varyant" in temiz_col or "variant" in temiz_col: yeni_kolonlar[col] = "varyant"
+        elif "versiyon" in temiz_col or "version" in temiz_col: yeni_kolonlar[col] = "versiyon"
+        elif "ticari" in temiz_col: yeni_kolonlar[col] = "ticari_ad"
+        elif "gtip" in temiz_col: yeni_kolonlar[col] = "gtip_no"
+        elif "birim" in temiz_col or "sube" in temiz_col or "hizmet" in temiz_col: yeni_kolonlar[col] = "birim"
+        elif "ulke" in temiz_col: yeni_kolonlar[col] = "uretim_ulkesi"
+        elif "sayi" in temiz_col or "adet" in temiz_col: yeni_kolonlar[col] = "arac_sayisi"
+        else: yeni_kolonlar[col] = col 
+    return yeni_kolonlar
+
 # --- 2. DURUM SORGULARI ---
 def durum_sayilarini_al():
     with get_db() as conn:
@@ -165,12 +193,13 @@ def durum_sayilarini_al():
 def verileri_getir():
     try:
         df = pd.read_sql_query("SELECT * FROM denetimler ORDER BY id DESC", engine)
-        df['secim_tarihi_dt'] = pd.to_datetime(df['secim_tarihi'])
-        bugun = pd.to_datetime(datetime.now().strftime("%Y-%m-%d"))
-        df['Geçen Gün'] = (bugun - df['secim_tarihi_dt']).dt.days.apply(lambda x: str(int(x)) if pd.notnull(x) else '-')
-        df['secim_tarihi'] = df['secim_tarihi_dt'].dt.strftime('%Y-%m-%d').fillna('-')
-        for c in df.columns: 
-            if c not in ['Geçen Gün', 'secim_tarihi_dt']: df[c] = df[c].fillna('-')
+        if not df.empty:
+            df['secim_tarihi_dt'] = pd.to_datetime(df['secim_tarihi'], errors='coerce')
+            bugun = pd.to_datetime(datetime.now().strftime("%Y-%m-%d"))
+            df['Geçen Gün'] = (bugun - df['secim_tarihi_dt']).dt.days.apply(lambda x: str(int(x)) if pd.notnull(x) else '-')
+            df['secim_tarihi'] = df['secim_tarihi_dt'].dt.strftime('%Y-%m-%d').fillna('-')
+            for c in df.columns: 
+                if c not in ['Geçen Gün', 'secim_tarihi_dt']: df[c] = df[c].fillna('-')
         return df
     except Exception:
         return pd.DataFrame()
@@ -424,27 +453,16 @@ with tabs[2]:
                     else:
                         df_ekle = pd.read_excel(up)
                     
-                    sutun_haritasi = {
-                        "BasvuruNo": "basvuru_no",
-                        "Firma": "firma_adi",
-                        "Marka": "marka",
-                        "Araç Kategori": "arac_kategori",
-                        "Tip": "arac_tipi",
-                        "Varyant": "varyant",
-                        "Versiyon": "versiyon",
-                        "TicariAd": "ticari_ad",
-                        "GtipNo": "gtip_no",
-                        "Birim": "birim",
-                        "Üretildiği Ülke": "uretim_ulkesi",
-                        "Araç Sayısı": "arac_sayisi"
-                    }
-                    
-                    df_ekle.columns = df_ekle.columns.str.strip()
+                    # Akıllı eşleştirme fonksiyonunu çağırıyoruz
+                    sutun_haritasi = akilli_sutun_eslestir(df_ekle.columns)
                     df_ekle.rename(columns=sutun_haritasi, inplace=True)
                     
                     df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
                     if 'durum' not in df_ekle.columns:
                         df_ekle['durum'] = 'Şasi Bekliyor'
+                        
+                    if 'basvuru_tarihi' not in df_ekle.columns:
+                        df_ekle['basvuru_tarihi'] = datetime.now().strftime("%Y-%m-%d")
                     
                     def il_tahmin_et(birim_metni):
                         if pd.isna(birim_metni): return st.session_state.sorumlu_il
@@ -470,7 +488,7 @@ with tabs[2]:
                     
                     mevcut_kayitlar = pd.read_sql_query("SELECT basvuru_no, firma_adi, marka, arac_tipi FROM denetimler", engine)
                     
-                    mevcut_basvuru_listesi = mevcut_kayitlar['basvuru_no'].astype(str).tolist()
+                    mevcut_basvuru_listesi = mevcut_kayitlar['basvuru_no'].astype(str).tolist() if not mevcut_kayitlar.empty else []
                     df_ekle['basvuru_no_str'] = df_ekle['basvuru_no'].astype(str)
                     
                     df_yeni = df_ekle[~df_ekle['basvuru_no_str'].isin(mevcut_basvuru_listesi)].copy()
