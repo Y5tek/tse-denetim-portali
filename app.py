@@ -111,12 +111,11 @@ def excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi):
     st.success(f"Tebrikler! {len(df_yeni)} yeni kayıt başarıyla eklendi. ({atlanan_sayi} mükerrer atlandı.)")
     time.sleep(2); st.rerun()
 
-# --- 3 GÜN GECİKME OTOMASYONU (YENİ EKLENDİ) ---
+# --- 3 GÜN GECİKME OTOMASYONU ---
 def geciken_islemleri_kontrol_et_ve_bildir():
     try:
         with get_db() as conn:
             cursor = conn.cursor()
-            # Sadece uyarı gönderilmemiş ve hala şasi bekleyenleri seç
             cursor.execute("SELECT id, basvuru_no, il, secim_tarihi, firma_adi FROM denetimler WHERE durum = 'Şasi Bekliyor' AND uyari_gonderildi = 0")
             bekleyenler = cursor.fetchall()
             
@@ -129,7 +128,7 @@ def geciken_islemleri_kontrol_et_ve_bildir():
                 if s_tarihi:
                     s_tarihi_dt = pd.to_datetime(s_tarihi)
                     fark = (bugun - s_tarihi_dt).days
-                    if fark >= 3: # 3 GÜN KONTROLÜ
+                    if fark >= 3: 
                         gecikenler.append(f"📍 <b>İl:</b> {k_il} | 📄 <b>Başvuru:</b> {b_no} | 🏢 <b>Firma:</b> {f_adi} <i>({fark} gündür bekliyor)</i>")
                         geciken_id_listesi.append(k_id)
             
@@ -138,23 +137,20 @@ def geciken_islemleri_kontrol_et_ve_bildir():
                 icerik += "<br>".join(gecikenler)
                 icerik += "<br><br>Lütfen ilgili illerin uzmanları ile iletişime geçerek süreci hızlandırınız."
                 
-                # Sadece 1 kez mail atmak için ID'leri güncelle
                 for g_id in geciken_id_listesi:
                     cursor.execute("UPDATE denetimler SET uyari_gonderildi = 1 WHERE id = %s", (g_id,))
                 conn.commit()
                 
-                # Admin'e Maili gönder
                 threading.Thread(target=mail_gonder, args=(ADMIN_MAIL, "🚨 Geciken Şasi Atamaları (3+ Gün)", icerik)).start()
     except Exception:
-        pass # Hata olursa sistemi çökertmemesi için sessizce geç
+        pass 
 
-# Bu fonksiyon her 1 saatte sadece 1 kez çalışır (Sistemi yormaz)
 @st.cache_data(ttl=3600)
 def periyodik_kontrol():
     geciken_islemleri_kontrol_et_ve_bildir()
     return True
 
-periyodik_kontrol() # Otomasyonu tetikle
+periyodik_kontrol()
 
 def akilli_sutun_eslestir(df_columns):
     yeni = {}
@@ -189,7 +185,7 @@ def verileri_getir():
         return df
     except: return pd.DataFrame()
 
-# --- OTURUM YÖNETİMİ VE GİRİŞ ---
+# --- OTURUM YÖNETİMİ VE MİNİMAL GİRİŞ EKRANI ---
 if 'giris_yapildi' not in st.session_state:
     st.session_state.update({'giris_yapildi': False, 'kullanici_adi': "", 'rol': "", 'sorumlu_il': "", 'excel_yetkisi': 0, 'ob_df': None, 'atlanmis': 0})
 
@@ -203,15 +199,12 @@ def durum_guncelle(kid, sasi, durum, notlar, starih="MEVCUT", silme=False, snede
         conn.commit()
     if silme: threading.Thread(target=mail_gonder, args=(ADMIN_MAIL, "⚠️ YENİ SİLME TALEBİ", f"{sasi} için silme talebi var.")).start()
 
+# ---> MİNİMAL GİRİŞ EKRANI BURADA BAŞLIYOR <---
 if not st.session_state.giris_yapildi:
-    # 1. Adım: Ekranın dikeyde ortalanması için üstten boşluk bırakıyoruz
     st.markdown("<br><br><br>", unsafe_allow_html=True)
-    
-    # 2. Adım: Sayfayı 3'e bölüp sağdan ve soldan geniş boşluklar bırakıyoruz [1.5, 2, 1.5]
     c1, c2, c3 = st.columns([1.5, 2, 1.5])
     
     with c2:
-        # 3. Adım: Logonun devasa olmasını engellemek için onu da kendi içinde ortalıyoruz
         if os.path.exists("tse_logo.png"): 
             l1, l2, l3 = st.columns([1, 1.2, 1])
             with l2:
@@ -220,7 +213,6 @@ if not st.session_state.giris_yapildi:
         st.markdown("<h2 style='text-align: center; color: #E03131; margin-top: -15px;'>TSE NUMUNE TAKİP</h2>", unsafe_allow_html=True)
         st.markdown("<p style='text-align: center; color: #666666; font-size: 14px; margin-bottom: 25px;'>Sisteme erişmek için lütfen giriş yapın.</p>", unsafe_allow_html=True)
         
-        # Giriş / Kayıt Sekmeleri
         tg, tk = st.tabs(["🔐 Giriş Yap", "📝 Kayıt Ol"])
         
         with tg:
@@ -274,7 +266,6 @@ with t[0]:
     if not df.empty:
         g_df = df if st.session_state.rol == "admin" else df[df['il'] == st.session_state.sorumlu_il]
         
-        # Filtreleme Alanı
         with st.expander("🔎 Gelişmiş Filtreleme (Daralt)"):
             f1, f2, f3 = st.columns(3)
             sec_durum = f1.multiselect("Duruma Göre:", g_df['durum'].unique())
@@ -285,13 +276,11 @@ with t[0]:
             if sec_il and st.session_state.rol == "admin": g_df = g_df[g_df['il'].isin(sec_il)]
             if kelime: g_df = g_df[g_df.apply(lambda r: kelime.lower() in r.astype(str).str.lower().values, axis=1)]
 
-        # Özet Metrikler
         c_m1, c_m2, c_m3 = st.columns(3)
         c_m1.metric("Toplam Listelenen", len(g_df))
         c_m2.metric("Teste Gönderildi", len(g_df[g_df['durum'] == 'Teste Gönderildi']))
         c_m3.metric("Olumlu", len(g_df[g_df['durum'] == 'Tamamlandı - Olumlu']))
 
-        # Grafikler
         if len(g_df) > 0:
             gc1, gc2 = st.columns(2)
             with gc1:
@@ -304,7 +293,6 @@ with t[0]:
                     fig2 = px.bar(g_df['marka'].value_counts().reset_index().head(10), x='marka', y='count', title='En Çok İşlem Yapılan Markalar', color='marka')
                 st.plotly_chart(fig2, use_container_width=True)
 
-        # Tablo
         istenen = ['sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_tipi', 'firma_adi', 'il']
         goster_df = g_df[[c for c in istenen if c in g_df.columns] + [c for c in g_df.columns if c not in istenen and c not in ['secim_tarihi_dt', 'silme_talebi', 'uyari_gonderildi']]]
         st.dataframe(goster_df, use_container_width=True, height=400)
