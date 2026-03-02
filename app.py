@@ -302,8 +302,9 @@ with t[0]:
                     fig2 = px.bar(g_df['marka'].value_counts().reset_index().head(10), x='marka', y='count', title='En Çok İşlem Yapılan Markalar', color='marka')
                 st.plotly_chart(fig2, use_container_width=True)
 
-        istenen = ['sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_tipi', 'firma_adi', 'il']
+        istenen = ['basvuru_no', 'sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_kategori', 'arac_tipi', 'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 'firma_adi', 'il']
         goster_df = g_df[[c for c in istenen if c in g_df.columns] + [c for c in g_df.columns if c not in istenen and c not in ['secim_tarihi_dt', 'silme_talebi', 'uyari_gonderildi']]]
+        
         st.dataframe(goster_df.style.apply(satir_boya, axis=1), use_container_width=True, height=400)
         
         b = io.BytesIO(); goster_df.to_excel(b, index=False)
@@ -404,15 +405,24 @@ with t[2]:
             if up and st.button("Aktar"):
                 df_ekle = pd.read_excel(up)
                 
-                # DUPLICATE COLUMN (Aynı isimli birden fazla kolon) HATASI ÇÖZÜMÜ:
                 df_ekle.rename(columns=akilli_sutun_eslestir(df_ekle.columns), inplace=True)
                 df_ekle = df_ekle.loc[:, ~df_ekle.columns.duplicated()]
                 
                 df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
                 if 'durum' not in df_ekle.columns: df_ekle['durum'] = 'Şasi Bekliyor'
                 if 'il' not in df_ekle.columns: df_ekle['il'] = st.session_state.sorumlu_il
+                if 'basvuru_tarihi' not in df_ekle.columns: df_ekle['basvuru_tarihi'] = datetime.now().strftime("%Y-%m-%d")
+                if 'secim_tarihi' not in df_ekle.columns: df_ekle['secim_tarihi'] = datetime.now().strftime("%Y-%m-%d")
                 
-                df_ekle = df_ekle[[c for c in df_ekle.columns if c in ['basvuru_no', 'firma_adi', 'marka', 'arac_tipi', 'sasi_no', 'il', 'durum', 'ekleyen_kullanici']]]
+                # KÖKTEN ÇÖZÜM: TÜM GEÇERLİ SÜTUNLARA İZİN VERİYORUZ
+                gecerli_sutunlar = [
+                    'basvuru_no', 'firma_adi', 'marka', 'arac_kategori', 'arac_tipi', 
+                    'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 'birim', 'uretim_ulkesi', 
+                    'arac_sayisi', 'sasi_no', 'basvuru_tarihi', 'secim_tarihi', 'il', 
+                    'durum', 'notlar', 'ekleyen_kullanici'
+                ]
+                
+                df_ekle = df_ekle[[c for c in df_ekle.columns if c in gecerli_sutunlar]]
                 
                 mevcut_db = pd.read_sql_query("SELECT basvuru_no, firma_adi, marka, arac_tipi FROM denetimler", engine)
                 m_bas_list = mevcut_db['basvuru_no'].astype(str).tolist() if not mevcut_db.empty else []
@@ -421,7 +431,6 @@ with t[2]:
                 atlanmis_sayi = len(df_ekle) - len(df_yeni)
                 
                 if len(df_yeni) > 0:
-                    # GEREKSİZ UYARIYI ENGELLEYEN GERÇEK ÇAKIŞMA KONTROLÜ
                     cakisma_var = False
                     if not mevcut_db.empty:
                         mevcut_str = (mevcut_db['firma_adi'].astype(str) + mevcut_db['marka'].astype(str) + mevcut_db['arac_tipi'].astype(str)).str.lower().str.replace(" ", "")
