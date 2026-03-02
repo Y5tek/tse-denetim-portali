@@ -184,6 +184,16 @@ def verileri_getir():
         return df
     except: return pd.DataFrame()
 
+# --- RENKLENDİRME FONKSİYONU ---
+def satir_boya(row): 
+    if row['durum'] == 'Testte': 
+        return ['background-color: rgba(255, 193, 7, 0.3)'] * len(row) # Sarı
+    elif row['durum'] == 'Tamamlandı - Olumlu': 
+        return ['background-color: rgba(40, 167, 69, 0.3)'] * len(row) # Yeşil
+    elif row['durum'] == 'Tamamlandı - Olumsuz': 
+        return ['background-color: rgba(220, 53, 69, 0.3)'] * len(row) # Kırmızı
+    return [''] * len(row) # Beyaz (Şasi Bekliyor veya diğer durumlar)
+
 # --- OTURUM YÖNETİMİ ---
 if 'giris_yapildi' not in st.session_state:
     st.session_state.update({'giris_yapildi': False, 'kullanici_adi': "", 'rol': "", 'sorumlu_il': "", 'excel_yetkisi': 0, 'ob_df': None, 'atlanmis': 0})
@@ -277,7 +287,7 @@ with t[0]:
 
         c_m1, c_m2, c_m3 = st.columns(3)
         c_m1.metric("Toplam Listelenen", len(g_df))
-        c_m2.metric("Teste Gönderildi", len(g_df[g_df['durum'] == 'Teste Gönderildi']))
+        c_m2.metric("Testte", len(g_df[g_df['durum'] == 'Testte']))
         c_m3.metric("Olumlu", len(g_df[g_df['durum'] == 'Tamamlandı - Olumlu']))
 
         if len(g_df) > 0:
@@ -294,7 +304,9 @@ with t[0]:
 
         istenen = ['sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_tipi', 'firma_adi', 'il']
         goster_df = g_df[[c for c in istenen if c in g_df.columns] + [c for c in g_df.columns if c not in istenen and c not in ['secim_tarihi_dt', 'silme_talebi', 'uyari_gonderildi']]]
-        st.dataframe(goster_df, use_container_width=True, height=400)
+        
+        # TABLOYA RENKLENDİRMEYİ GERİ UYGULADIK
+        st.dataframe(goster_df.style.apply(satir_boya, axis=1), use_container_width=True, height=400)
         
         b = io.BytesIO(); goster_df.to_excel(b, index=False)
         st.download_button("📥 Tabloyu Excel Olarak İndir", b.getvalue(), "Rapor.xlsx")
@@ -309,7 +321,7 @@ with t[1]:
         st.warning("⚠️ Çift Kayıt Riski! Yinede kaydetmek istiyor musunuz?")
         ce, ch = st.columns(2)
         if ce.button("✅ Devam"): 
-            durum_guncelle(p_id, st.session_state.o_no, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d"))
+            durum_guncelle(p_id, st.session_state.o_no, 'Testte', "", starih=datetime.now().strftime("%Y-%m-%d"))
             st.session_state.update({'o_id': None, 'o_no': None}); st.rerun()
         if ch.button("❌ İptal"): st.session_state.update({'o_id': None, 'o_no': None}); st.rerun()
     else:
@@ -328,7 +340,7 @@ with t[1]:
                                 cur = conn.cursor()
                                 cur.execute('SELECT id FROM denetimler WHERE firma_adi=%s AND marka=%s AND arac_tipi=%s AND id != %s', (rm['firma_adi'], rm['marka'], rm['arac_tipi'], sid))
                                 if cur.fetchone(): st.session_state.update({'o_id': sid, 'o_no': vin}); st.rerun()
-                                else: durum_guncelle(sid, vin, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d")); st.rerun()
+                                else: durum_guncelle(sid, vin, 'Testte', "", starih=datetime.now().strftime("%Y-%m-%d")); st.rerun()
                         except: st.error("Şasi mevcut!")
         with cr:
             st.markdown("#### 🔍 İşlem & İlave Şasi")
@@ -341,7 +353,7 @@ with t[1]:
                     if sr:
                         sid = int(sr.split(" |")[0]); cu = ilist[ilist['id'] == sid].iloc[0]
                         with st.form("upd"):
-                            nd = st.selectbox("Yeni Durum", ["Teste Gönderildi", "Tamamlandı - Olumlu", "Tamamlandı - Olumsuz"])
+                            nd = st.selectbox("Yeni Durum", ["Testte", "Tamamlandı - Olumlu", "Tamamlandı - Olumsuz"])
                             sl = st.checkbox("Silme Talebi")
                             if st.form_submit_button("Güncelle"): durum_guncelle(sid, cu['sasi_no'], nd, "", silme=sl, snedeni="Talep"); st.rerun()
 
@@ -361,7 +373,7 @@ with t[1]:
                                         with get_db() as c:
                                             c.cursor().execute('''INSERT INTO denetimler 
                                                 (basvuru_no, firma_adi, marka, arac_kategori, arac_tipi, varyant, versiyon, ticari_ad, gtip_no, birim, uretim_ulkesi, arac_sayisi, sasi_no, basvuru_tarihi, secim_tarihi, il, durum, ekleyen_kullanici) 
-                                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'Teste Gönderildi',%s)''', 
+                                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'Testte',%s)''', 
                                                 (ref['basvuru_no'], ref['firma_adi'], ref['marka'], ref['arac_kategori'], ref['arac_tipi'], ref['varyant'], ref['versiyon'], ref['ticari_ad'], ref['gtip_no'], ref['birim'], ref['uretim_ulkesi'], ref['arac_sayisi'], ysasi, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), ref['il'], st.session_state.kullanici_adi))
                                             c.commit()
                                         st.success("İlave şasi eklendi!"); time.sleep(1); st.rerun()
@@ -385,7 +397,7 @@ with t[2]:
                 if st.form_submit_button("Ekle"):
                     try:
                         with get_db() as c:
-                            c.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, secim_tarihi, il) VALUES (%s,%s,%s,%s,%s,%s,%s)", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il))
+                            c.cursor().execute("INSERT INTO denetimler (firma_adi, marka, arac_tipi, sasi_no, basvuru_no, secim_tarihi, il, durum) VALUES (%s,%s,%s,%s,%s,%s,%s, 'Testte')", (fa, ma, ti, sn, bn, datetime.now().strftime("%Y-%m-%d"), st.session_state.sorumlu_il))
                             c.commit()
                         st.success("Eklendi."); st.rerun()
                     except: st.error("Şasi mevcut!")
