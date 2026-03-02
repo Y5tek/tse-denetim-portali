@@ -67,6 +67,12 @@ def veritabanini_hazirla():
         cursor.execute('''CREATE TABLE IF NOT EXISTS kullanicilar (
             id SERIAL PRIMARY KEY, kullanici_adi TEXT UNIQUE NOT NULL, sifre TEXT NOT NULL,
             rol TEXT NOT NULL, email TEXT, sorumlu_il TEXT, onay_durumu INTEGER DEFAULT 1, excel_yukleme_yetkisi INTEGER DEFAULT 0)''')
+        
+        # 3 Gün uyarısı için yeni kolonu ekle (Eğer yoksa)
+        cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='denetimler' AND column_name='uyari_gonderildi'")
+        if not cursor.fetchone():
+            cursor.execute("ALTER TABLE denetimler ADD COLUMN uyari_gonderildi INTEGER DEFAULT 0")
+        
         conn.commit()
 
         cursor.execute("SELECT COUNT(*) FROM kullanicilar WHERE rol = 'admin'")
@@ -104,6 +110,51 @@ def excel_kaydet_ve_mail_at(df_yeni, atlanan_sayi):
     except: pass
     st.success(f"Tebrikler! {len(df_yeni)} yeni kayıt başarıyla eklendi. ({atlanan_sayi} mükerrer atlandı.)")
     time.sleep(2); st.rerun()
+
+# --- 3 GÜN GECİKME OTOMASYONU (YENİ EKLENDİ) ---
+def geciken_islemleri_kontrol_et_ve_bildir():
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            # Sadece uyarı gönderilmemiş ve hala şasi bekleyenleri seç
+            cursor.execute("SELECT id, basvuru_no, il, secim_tarihi, firma_adi FROM denetimler WHERE durum = 'Şasi Bekliyor' AND uyari_gonderildi = 0")
+            bekleyenler = cursor.fetchall()
+            
+            gecikenler = []
+            geciken_id_listesi = []
+            bugun = pd.to_datetime(datetime.now().strftime("%Y-%m-%d"))
+            
+            for satir in bekleyenler:
+                k_id, b_no, k_il, s_tarihi, f_adi = satir
+                if s_tarihi:
+                    s_tarihi_dt = pd.to_datetime(s_tarihi)
+                    fark = (bugun - s_tarihi_dt).days
+                    if fark >= 3: # 3 GÜN KONTROLÜ
+                        gecikenler.append(f"📍 <b>İl:</b> {k_il} | 📄 <b>Başvuru:</b> {b_no} | 🏢 <b>Firma:</b> {f_adi} <i>({fark} gündür bekliyor)</i>")
+                        geciken_id_listesi.append(k_id)
+            
+            if gecikenler:
+                icerik = "Sayın Yönetici,<br><br>Aşağıdaki başvurular sisteme eklenmelerinin üzerinden <b>3 günden fazla</b> zaman geçmesine rağmen hala <b>'Şasi Bekliyor'</b> durumundadır ve işlem yapılmamıştır:<br><br>"
+                icerik += "<br>".join(gecikenler)
+                icerik += "<br><br>Lütfen ilgili illerin uzmanları ile iletişime geçerek süreci hızlandırınız."
+                
+                # Sadece 1 kez mail atmak için ID'leri güncelle
+                for g_id in geciken_id_listesi:
+                    cursor.execute("UPDATE denetimler SET uyari_gonderildi = 1 WHERE id = %s", (g_id,))
+                conn.commit()
+                
+                # Admin'e Maili gönder
+                threading.Thread(target=mail_gonder, args=(ADMIN_MAIL, "🚨 Geciken Şasi Atamaları (3+ Gün)", icerik)).start()
+    except Exception:
+        pass # Hata olursa sistemi çökertmemesi için sessizce geç
+
+# Bu fonksiyon her 1 saatte sadece 1 kez çalışır (Sistemi yormaz)
+@st.cache_data(ttl=3600)
+def periyodik_kontrol():
+    geciken_islemleri_kontrol_et_ve_bildir()
+    return True
+
+periyodik_kontrol() # Otomasyonu tetikle
 
 def akilli_sutun_eslestir(df_columns):
     yeni = {}
@@ -240,7 +291,7 @@ with t[0]:
 
         # Tablo
         istenen = ['sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_tipi', 'firma_adi', 'il']
-        goster_df = g_df[[c for c in istenen if c in g_df.columns] + [c for c in g_df.columns if c not in istenen and c not in ['secim_tarihi_dt', 'silme_talebi']]]
+        goster_df = g_df[[c for c in istenen if c in g_df.columns] + [c for c in g_df.columns if c not in istenen and c not in ['secim_tarihi_dt', 'silme_talebi', 'uyari_gonderildi']]]
         st.dataframe(goster_df, use_container_width=True, height=400)
         
         b = io.BytesIO(); goster_df.to_excel(b, index=False)
