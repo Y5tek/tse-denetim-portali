@@ -187,12 +187,12 @@ def verileri_getir():
 # --- RENKLENDİRME FONKSİYONU ---
 def satir_boya(row): 
     if row['durum'] == 'Testte': 
-        return ['background-color: rgba(255, 193, 7, 0.3)'] * len(row) # Sarı
+        return ['background-color: rgba(255, 193, 7, 0.3)'] * len(row)
     elif row['durum'] == 'Tamamlandı - Olumlu': 
-        return ['background-color: rgba(40, 167, 69, 0.3)'] * len(row) # Yeşil
+        return ['background-color: rgba(40, 167, 69, 0.3)'] * len(row)
     elif row['durum'] == 'Tamamlandı - Olumsuz': 
-        return ['background-color: rgba(220, 53, 69, 0.3)'] * len(row) # Kırmızı
-    return [''] * len(row) # Beyaz (Şasi Bekliyor veya diğer durumlar)
+        return ['background-color: rgba(220, 53, 69, 0.3)'] * len(row)
+    return [''] * len(row)
 
 # --- OTURUM YÖNETİMİ ---
 if 'giris_yapildi' not in st.session_state:
@@ -304,8 +304,6 @@ with t[0]:
 
         istenen = ['sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_tipi', 'firma_adi', 'il']
         goster_df = g_df[[c for c in istenen if c in g_df.columns] + [c for c in g_df.columns if c not in istenen and c not in ['secim_tarihi_dt', 'silme_talebi', 'uyari_gonderildi']]]
-        
-        # TABLOYA RENKLENDİRMEYİ GERİ UYGULADIK
         st.dataframe(goster_df.style.apply(satir_boya, axis=1), use_container_width=True, height=400)
         
         b = io.BytesIO(); goster_df.to_excel(b, index=False)
@@ -405,17 +403,37 @@ with t[2]:
             up = st.file_uploader("Excel Yükle", type=['xlsx'])
             if up and st.button("Aktar"):
                 df_ekle = pd.read_excel(up)
+                
+                # DUPLICATE COLUMN (Aynı isimli birden fazla kolon) HATASI ÇÖZÜMÜ:
                 df_ekle.rename(columns=akilli_sutun_eslestir(df_ekle.columns), inplace=True)
+                df_ekle = df_ekle.loc[:, ~df_ekle.columns.duplicated()]
+                
                 df_ekle['ekleyen_kullanici'] = st.session_state.kullanici_adi
                 if 'durum' not in df_ekle.columns: df_ekle['durum'] = 'Şasi Bekliyor'
                 if 'il' not in df_ekle.columns: df_ekle['il'] = st.session_state.sorumlu_il
                 
                 df_ekle = df_ekle[[c for c in df_ekle.columns if c in ['basvuru_no', 'firma_adi', 'marka', 'arac_tipi', 'sasi_no', 'il', 'durum', 'ekleyen_kullanici']]]
-                m_bas = pd.read_sql_query("SELECT basvuru_no FROM denetimler", engine)['basvuru_no'].astype(str).tolist()
                 
-                df_yeni = df_ekle[~df_ekle['basvuru_no'].astype(str).isin(m_bas)].copy()
-                if len(df_yeni) > 0: st.session_state.update({'ob_df': df_yeni, 'atlanmis': len(df_ekle)-len(df_yeni)}); st.rerun()
-                else: st.warning("Hepsi sistemde mevcut!")
+                mevcut_db = pd.read_sql_query("SELECT basvuru_no, firma_adi, marka, arac_tipi FROM denetimler", engine)
+                m_bas_list = mevcut_db['basvuru_no'].astype(str).tolist() if not mevcut_db.empty else []
+                
+                df_yeni = df_ekle[~df_ekle['basvuru_no'].astype(str).isin(m_bas_list)].copy()
+                atlanmis_sayi = len(df_ekle) - len(df_yeni)
+                
+                if len(df_yeni) > 0:
+                    # GEREKSİZ UYARIYI ENGELLEYEN GERÇEK ÇAKIŞMA KONTROLÜ
+                    cakisma_var = False
+                    if not mevcut_db.empty:
+                        mevcut_str = (mevcut_db['firma_adi'].astype(str) + mevcut_db['marka'].astype(str) + mevcut_db['arac_tipi'].astype(str)).str.lower().str.replace(" ", "")
+                        yeni_str = (df_yeni['firma_adi'].astype(str) + df_yeni['marka'].astype(str) + df_yeni['arac_tipi'].astype(str)).str.lower().str.replace(" ", "")
+                        cakisma_var = yeni_str.isin(mevcut_str).any()
+                        
+                    if cakisma_var:
+                        st.session_state.update({'ob_df': df_yeni, 'atlanmis': atlanmis_sayi}); st.rerun()
+                    else:
+                        excel_kaydet_ve_mail_at(df_yeni, atlanmis_sayi)
+                else: 
+                    st.warning("Yüklediğiniz dosyadaki tüm kayıtlar zaten sistemde mevcut!")
 
 # --- SEKME 4: PROFİLİM ---
 with t[3]:
