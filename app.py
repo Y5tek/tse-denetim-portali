@@ -159,14 +159,15 @@ def akilli_sutun_eslestir(df_columns):
         elif "firma" in tc or "kurum" in tc: yeni[col] = "firma_adi"
         elif "marka" in tc: yeni[col] = "marka"
         elif "kategori" in tc: yeni[col] = "arac_kategori"
-        elif "tip" in tc: yeni[col] = "arac_tipi"
+        elif "gtip" in tc: yeni[col] = "gtip_no"  # DÜZELTME: GTİP KONTROLÜ TİP'TEN ÖNCE YAPILMALI!
+        elif "tip" in tc: yeni[col] = "arac_tipi" 
         elif "varyant" in tc or "variant" in tc: yeni[col] = "varyant"
         elif "versiyon" in tc or "version" in tc: yeni[col] = "versiyon"
         elif "ticari" in tc: yeni[col] = "ticari_ad"
-        elif "gtip" in tc: yeni[col] = "gtip_no"
         elif "birim" in tc or "sube" in tc or "hizmet" in tc: yeni[col] = "birim"
         elif "ulke" in tc: yeni[col] = "uretim_ulkesi"
         elif "sayi" in tc or "adet" in tc: yeni[col] = "arac_sayisi"
+        elif "sasi" in tc or "vin" in tc: yeni[col] = "sasi_no"
         else: yeni[col] = col 
     return yeni
 
@@ -302,7 +303,12 @@ with t[0]:
                     fig2 = px.bar(g_df['marka'].value_counts().reset_index().head(10), x='marka', y='count', title='En Çok İşlem Yapılan Markalar', color='marka')
                 st.plotly_chart(fig2, use_container_width=True)
 
-        istenen = ['basvuru_no', 'sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 'arac_kategori', 'arac_tipi', 'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 'firma_adi', 'il']
+        # TABLODA TÜM SÜTUNLARI GÖSTERECEK ŞEKİLDE DÜZENLENDİ
+        istenen = [
+            'basvuru_no', 'sasi_no', 'durum', 'secim_tarihi', 'Geçen Gün', 'marka', 
+            'arac_kategori', 'arac_tipi', 'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 
+            'uretim_ulkesi', 'arac_sayisi', 'firma_adi', 'il'
+        ]
         goster_df = g_df[[c for c in istenen if c in g_df.columns] + [c for c in g_df.columns if c not in istenen and c not in ['secim_tarihi_dt', 'silme_talebi', 'uyari_gonderildi']]]
         
         st.dataframe(goster_df.style.apply(satir_boya, axis=1), use_container_width=True, height=400)
@@ -401,9 +407,10 @@ with t[2]:
                         st.success("Eklendi."); st.rerun()
                     except: st.error("Şasi mevcut!")
         with ce:
-            up = st.file_uploader("Excel Yükle", type=['xlsx'])
+            up = st.file_uploader("Excel Yükle", type=['xlsx', 'csv'])
             if up and st.button("Aktar"):
-                df_ekle = pd.read_excel(up)
+                if up.name.endswith('.csv'): df_ekle = pd.read_csv(up)
+                else: df_ekle = pd.read_excel(up)
                 
                 df_ekle.rename(columns=akilli_sutun_eslestir(df_ekle.columns), inplace=True)
                 df_ekle = df_ekle.loc[:, ~df_ekle.columns.duplicated()]
@@ -414,7 +421,6 @@ with t[2]:
                 if 'basvuru_tarihi' not in df_ekle.columns: df_ekle['basvuru_tarihi'] = datetime.now().strftime("%Y-%m-%d")
                 if 'secim_tarihi' not in df_ekle.columns: df_ekle['secim_tarihi'] = datetime.now().strftime("%Y-%m-%d")
                 
-                # KÖKTEN ÇÖZÜM: TÜM GEÇERLİ SÜTUNLARA İZİN VERİYORUZ
                 gecerli_sutunlar = [
                     'basvuru_no', 'firma_adi', 'marka', 'arac_kategori', 'arac_tipi', 
                     'varyant', 'versiyon', 'ticari_ad', 'gtip_no', 'birim', 'uretim_ulkesi', 
