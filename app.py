@@ -22,7 +22,7 @@ Bu portal, TSE numune takip süreçlerini dijitalleştirmek için tasarlanmışt
 
 ## 🖥 Sistem Sekmeleri
 * **📊 Ana Tablo:** Gelişmiş filtreler ve interaktif grafiklerle verileri analiz edin.
-* **🛠️ Numune Kayıt Girişi:** Bekleyen başvurulara şasi (VIN) atayın veya mevcut durumları güncelleyin.
+* **🛠️ Numune Kayıt Girişi:** Bekleyen başvurulara şasi (VIN) atayın, durum güncelleyin veya mevcut başvuruya İLAVE ŞASİ ekleyin.
 * **📥 Veri Girişi:** Sisteme tekli form ile veya akıllı Excel eşleştirmesi ile toplu veri yükleyin.
 * **👤 Profilim:** Hesap şifrenizi güvenli bir şekilde güncelleyin.
 * **👑 Yönetici Paneli:** Kullanıcı yetkilerini ve silme taleplerini yönetin (Sadece Admin).
@@ -68,7 +68,6 @@ def veritabanini_hazirla():
             id SERIAL PRIMARY KEY, kullanici_adi TEXT UNIQUE NOT NULL, sifre TEXT NOT NULL,
             rol TEXT NOT NULL, email TEXT, sorumlu_il TEXT, onay_durumu INTEGER DEFAULT 1, excel_yukleme_yetkisi INTEGER DEFAULT 0)''')
         
-        # 3 Gün uyarısı için yeni kolonu ekle (Eğer yoksa)
         cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='denetimler' AND column_name='uyari_gonderildi'")
         if not cursor.fetchone():
             cursor.execute("ALTER TABLE denetimler ADD COLUMN uyari_gonderildi INTEGER DEFAULT 0")
@@ -185,7 +184,7 @@ def verileri_getir():
         return df
     except: return pd.DataFrame()
 
-# --- OTURUM YÖNETİMİ VE MİNİMAL GİRİŞ EKRANI ---
+# --- OTURUM YÖNETİMİ ---
 if 'giris_yapildi' not in st.session_state:
     st.session_state.update({'giris_yapildi': False, 'kullanici_adi': "", 'rol': "", 'sorumlu_il': "", 'excel_yetkisi': 0, 'ob_df': None, 'atlanmis': 0})
 
@@ -199,7 +198,7 @@ def durum_guncelle(kid, sasi, durum, notlar, starih="MEVCUT", silme=False, snede
         conn.commit()
     if silme: threading.Thread(target=mail_gonder, args=(ADMIN_MAIL, "⚠️ YENİ SİLME TALEBİ", f"{sasi} için silme talebi var.")).start()
 
-# ---> MİNİMAL GİRİŞ EKRANI BURADA BAŞLIYOR <---
+# --- MİNİMAL GİRİŞ EKRANI ---
 if not st.session_state.giris_yapildi:
     st.markdown("<br><br><br>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1.5, 2, 1.5])
@@ -332,16 +331,42 @@ with t[1]:
                                 else: durum_guncelle(sid, vin, 'Teste Gönderildi', "", starih=datetime.now().strftime("%Y-%m-%d")); st.rerun()
                         except: st.error("Şasi mevcut!")
         with cr:
-            st.markdown("#### 🔍 Güncelleme & İlave")
-            if not i_df.empty:
-                ilist = i_df[i_df['durum'] != 'Şasi Bekliyor']
-                sr = st.selectbox("Şasi/Firma:", options=(ilist['id'].astype(str) + " | " + ilist['sasi_no'].astype(str)).tolist(), index=None) if not ilist.empty else None
-                if sr:
-                    sid = int(sr.split(" |")[0]); cu = ilist[ilist['id'] == sid].iloc[0]
-                    with st.form("upd"):
-                        nd = st.selectbox("Yeni Durum", ["Teste Gönderildi", "Tamamlandı - Olumlu", "Tamamlandı - Olumsuz"])
-                        sl = st.checkbox("Silme Talebi")
-                        if st.form_submit_button("Güncelle"): durum_guncelle(sid, cu['sasi_no'], nd, "", silme=sl, snedeni="Talep"); st.rerun()
+            st.markdown("#### 🔍 İşlem & İlave Şasi")
+            tab_guncelle, tab_ilave = st.tabs(["🔄 Durum Güncelle", "➕ İlave Şasi Ekle"])
+            
+            with tab_guncelle:
+                if not i_df.empty:
+                    ilist = i_df[i_df['durum'] != 'Şasi Bekliyor']
+                    sr = st.selectbox("Şasi/Firma Ara:", options=(ilist['id'].astype(str) + " | " + ilist['sasi_no'].astype(str)).tolist(), index=None) if not ilist.empty else None
+                    if sr:
+                        sid = int(sr.split(" |")[0]); cu = ilist[ilist['id'] == sid].iloc[0]
+                        with st.form("upd"):
+                            nd = st.selectbox("Yeni Durum", ["Teste Gönderildi", "Tamamlandı - Olumlu", "Tamamlandı - Olumsuz"])
+                            sl = st.checkbox("Silme Talebi")
+                            if st.form_submit_button("Güncelle"): durum_guncelle(sid, cu['sasi_no'], nd, "", silme=sl, snedeni="Talep"); st.rerun()
+
+            with tab_ilave:
+                st.info("Mevcut bir başvuruyu kopyalayarak ilave şasi ekler.")
+                if not i_df.empty:
+                    sr_add = st.selectbox("Kopyalanacak Başvuru:", options=(i_df['id'].astype(str) + " | " + i_df['basvuru_no'].astype(str) + " - " + i_df['firma_adi'].astype(str)).tolist(), index=None)
+                    if sr_add:
+                        sid_add = int(sr_add.split(" |")[0]); ref = i_df[i_df['id'] == sid_add].iloc[0]
+                        with st.form("add_sasi_form"):
+                            st.write(f"**B.No:** {ref['basvuru_no']} | **Firma:** {ref['firma_adi']} | **Tip:** {ref['arac_tipi']}")
+                            ysasi = st.text_input("Yeni Şasi Numarası (VIN)")
+                            if st.form_submit_button("İlave Şasiyi Kaydet"):
+                                if not ysasi.strip(): st.error("Lütfen şasi girin!")
+                                else:
+                                    try:
+                                        with get_db() as c:
+                                            c.cursor().execute('''INSERT INTO denetimler 
+                                                (basvuru_no, firma_adi, marka, arac_kategori, arac_tipi, varyant, versiyon, ticari_ad, gtip_no, birim, uretim_ulkesi, arac_sayisi, sasi_no, basvuru_tarihi, secim_tarihi, il, durum, ekleyen_kullanici) 
+                                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'Teste Gönderildi',%s)''', 
+                                                (ref['basvuru_no'], ref['firma_adi'], ref['marka'], ref['arac_kategori'], ref['arac_tipi'], ref['varyant'], ref['versiyon'], ref['ticari_ad'], ref['gtip_no'], ref['birim'], ref['uretim_ulkesi'], ref['arac_sayisi'], ysasi, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"), ref['il'], st.session_state.kullanici_adi))
+                                            c.commit()
+                                        st.success("İlave şasi eklendi!"); time.sleep(1); st.rerun()
+                                    except psycopg2.IntegrityError:
+                                        st.error("Bu şasi mevcut!")
 
 # --- SEKME 3: VERİ GİRİŞİ ---
 with t[2]:
