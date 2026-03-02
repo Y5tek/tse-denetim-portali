@@ -204,11 +204,25 @@ def durum_guncelle(kid, sasi, durum, notlar, starih="MEVCUT", silme=False, snede
     if silme: threading.Thread(target=mail_gonder, args=(ADMIN_MAIL, "⚠️ YENİ SİLME TALEBİ", f"{sasi} için silme talebi var.")).start()
 
 if not st.session_state.giris_yapildi:
-    c1, c2, c3 = st.columns([1, 2, 1])
+    # 1. Adım: Ekranın dikeyde ortalanması için üstten boşluk bırakıyoruz
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    
+    # 2. Adım: Sayfayı 3'e bölüp sağdan ve soldan geniş boşluklar bırakıyoruz [1.5, 2, 1.5]
+    c1, c2, c3 = st.columns([1.5, 2, 1.5])
+    
     with c2:
-        if os.path.exists("tse_logo.png"): st.image("tse_logo.png", use_container_width=True)
-        st.markdown("<h1 style='text-align: center; color: #E03131;'> TSE NUMUNE TAKİP</h1>", unsafe_allow_html=True)
+        # 3. Adım: Logonun devasa olmasını engellemek için onu da kendi içinde ortalıyoruz
+        if os.path.exists("tse_logo.png"): 
+            l1, l2, l3 = st.columns([1, 1.2, 1])
+            with l2:
+                st.image("tse_logo.png", use_container_width=True)
+                
+        st.markdown("<h2 style='text-align: center; color: #E03131; margin-top: -15px;'>TSE NUMUNE TAKİP</h2>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #666666; font-size: 14px; margin-bottom: 25px;'>Sisteme erişmek için lütfen giriş yapın.</p>", unsafe_allow_html=True)
+        
+        # Giriş / Kayıt Sekmeleri
         tg, tk = st.tabs(["🔐 Giriş Yap", "📝 Kayıt Ol"])
+        
         with tg:
             with st.form("login"):
                 ka, si = st.text_input("Kullanıcı Adı"), st.text_input("Şifre", type="password")
@@ -221,6 +235,7 @@ if not st.session_state.giris_yapildi:
                         if u[2]==0: st.warning("Oturum onayı bekleniyor.")
                         else: st.session_state.update({'giris_yapildi':True, 'kullanici_adi':ka, 'rol':u[0], 'sorumlu_il':u[1], 'excel_yetkisi':u[3]}); st.rerun()
                     else: st.error("❌ Hatalı bilgi.")
+        
         with tk:
             with st.form("reg"):
                 yk, ys, ye, yil = st.text_input("Kullanıcı Adı"), st.text_input("Şifre", type="password"), st.text_input("E-Posta"), st.selectbox("İl", ["Ankara", "İstanbul", "İzmir", "Bursa", "Kocaeli", "Diğer"])
